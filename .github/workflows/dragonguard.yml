@@ -1,0 +1,144 @@
+# DragonGuard scanning its own repository.
+name: DragonGuard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  # Needed to publish findings to code scanning. On a private repository this
+  # requires GitHub Advanced Security; the upload step tolerates its absence
+  # rather than failing the gate over it.
+  security-events: write
+  # Needed to read and post the pull request comment. Without this the comment
+  # step gets "Resource not accessible by integration" and fails a run whose
+  # scan actually passed.
+  pull-requests: write
+
+# A newer push supersedes an in-flight scan of the same branch.
+concurrency:
+  group: dragonguard-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned, because a scanner that changes underneath you changes every
+  # verdict it produces.
+  TRIVY_VERSION: "0.74.0"
+  GITLEAKS_VERSION: "8.30.1"
+  OSV_VERSION: "2.5.1"
+  OPENGREP_VERSION: "1.11.5"
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Gitleaks scans history; a shallow clone silently misses every
+          # credential that is not in the tip commit.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install engines
+        run: |
+          set -euo pipefail
+          bin=/usr/local/bin
+
+          curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            | sudo tar -xz -C "$bin" trivy
+
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | sudo tar -xz -C "$bin" gitleaks
+
+          sudo curl -fsSL -o "$bin/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
+          sudo chmod +x "$bin/osv-scanner"
+
+          sudo curl -fsSL -o "$bin/opengrep" \
+            "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          sudo chmod +x "$bin/opengrep"
+
+          trivy --version && gitleaks version && osv-scanner --version && opengrep --version
+
+      - name: Build
+        run: go build ./... && go build -o bin/dragon ./cmd/dragon
+
+      - name: Test
+        run: go test ./... -race
+
+      - name: Vet and format
+        run: |
+          go vet ./...
+          test -z "$(gofmt -l cmd pkg)" || { echo "gofmt found unformatted files:"; gofmt -l cmd pkg; exit 1; }
+
+      - name: Validate rules and policies
+        run: |
+          opengrep scan --config rules --validate
+          bin/dragon policy test policies
+
+      - name: Restore baseline and threat-intelligence state
+        uses: actions/cache@v4
+        with:
+          path: .dragon
+          # The baseline snapshot is what the regression gate compares
+          # against, so it has to outlive the runner. Restoring from main
+          # means a pull request is measured against main, not itself.
+          key: dragon-state-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            dragon-state-${{ github.ref_name }}-
+            dragon-state-main-
+
+      - name: Scan
+        id: scan
+        run: |
+          # Produce every artefact first, then gate. Reporting the findings
+          # matters even when — especially when — the gate blocks.
+          bin/dragon scan --format sarif     --output dragon.sarif --quiet || true
+          bin/dragon scan --format markdown  --output dragon.md    --quiet || true
+          bin/dragon scan --quiet
+
+      - name: Upload SARIF
+        # Private repositories need GitHub Advanced Security for code
+        # scanning. Its absence must not fail a run whose scan succeeded.
+        continue-on-error: true
+        if: always() && hashFiles('dragon.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: dragon.sarif
+          category: dragonguard
+
+      - name: Comment on the pull request
+        if: always() && github.event_name == 'pull_request' && hashFiles('dragon.md') != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('dragon.md', 'utf8');
+            const {owner, repo} = context.repo;
+            const issue_number = context.issue.number;
+
+            // Update the existing comment rather than adding one per push: a
+            // pull request with twenty stale security comments gets muted.
+            const marker = 'DragonGuard';
+            const comments = await github.rest.issues.listComments({owner, repo, issue_number});
+            const mine = comments.data.find(c =>
+              c.user.type === 'Bot' && c.body.includes(marker));
+
+            if (mine) {
+              await github.rest.issues.updateComment({owner, repo, comment_id: mine.id, body});
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number, body});
+            }
+
+      - name: Record the baseline
+        # Only main advances the ratchet. Letting a branch record its own
+        # baseline would launder a regression into the new normal.
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: bin/dragon scan --record --quiet || true

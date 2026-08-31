@@ -1,0 +1,44 @@
+apiVersion: dragonguard/v1
+kind: Baseline
+metadata:
+  name: default
+  description: Acceptable security posture for this project.
+
+# Hard gates: never acceptable, at any score.
+mandatory:
+  - no_active_secrets
+  - no_kev_in_production
+  - no_reachable_critical_vulnerability
+
+critical:
+  maximum_new: 0
+high:
+  maximum_new: 2
+
+# Regression gate: the ratchet. This is the gate a legacy codebase can pass
+# on day one, which is why it is the one that actually gets adopted.
+maximum_score_regression: 5
+
+# Score gates: absolute floors. Left unset deliberately -- run 'dragon scan'
+# a few times first, see where this project actually sits, then set a floor
+# just below it and raise it over time. A floor guessed in advance is a floor
+# somebody disables in a week.
+#
+# minimum_score: 80
+# dimensions:
+#   secrets:
+#     minimum: 100
+#     required: true
+#   dependencies:
+#     minimum: 75
+#     maximum_regression: 3
+
+block_on_policy_deny: true
+
+# Refuse to pass when engines were unavailable or intelligence could not be
+# fetched. A gate that passes because it could not look is not a gate.
+allow_degraded: false
+
+# Set while introducing the gate to a team: reports blocking conditions
+# without enforcing them.
+warn_only: false

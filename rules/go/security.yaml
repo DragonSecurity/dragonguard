@@ -1,0 +1,75 @@
+rules:
+  - id: dragon-go-sql-string-concat
+    languages: [go]
+    severity: ERROR
+    message: >-
+      SQL query assembled by concatenation or Sprintf. Use a parameterised
+      query - db.Query("... WHERE id = $1", id) - so the driver binds the value
+      rather than the query text carrying it.
+    metadata:
+      cwe: ["CWE-89"]
+      severity: high
+      security-severity: "7.5"
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: $DB.Query(fmt.Sprintf("...", ...), ...)
+          - pattern: $DB.QueryRow(fmt.Sprintf("...", ...), ...)
+          - pattern: $DB.Exec(fmt.Sprintf("...", ...), ...)
+          - pattern: $DB.Query("..." + $X, ...)
+          - pattern: $DB.Exec("..." + $X, ...)
+
+  - id: dragon-go-command-injection
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Command constructed from a formatted string and run through a shell.
+      exec.Command takes the program and its arguments separately for exactly
+      this reason - pass them as separate arguments and drop the shell.
+    metadata:
+      cwe: ["CWE-78"]
+      severity: critical
+      security-severity: "9.0"
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: exec.Command("sh", "-c", fmt.Sprintf("...", ...))
+          - pattern: exec.Command("bash", "-c", fmt.Sprintf("...", ...))
+          - pattern: exec.Command("sh", "-c", "..." + $X)
+
+  - id: dragon-go-ignored-error-on-verification
+    languages: [go]
+    severity: WARNING
+    message: >-
+      The error from a verification call is discarded, so the code proceeds as
+      though verification succeeded. A dropped error here is an authentication
+      bypass, not a style problem.
+    metadata:
+      cwe: ["CWE-252"]
+      severity: high
+      security-severity: "7.5"
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: _ = $X.Verify(...)
+          - pattern: _ = $X.VerifySignature(...)
+          - pattern: _ = bcrypt.CompareHashAndPassword(...)
+
+  - id: dragon-go-tls-verification-disabled
+    languages: [go]
+    severity: ERROR
+    message: >-
+      InsecureSkipVerify disables certificate validation, which removes the
+      only thing distinguishing the real server from an attacker on the path.
+      If this is for a self-signed certificate, add it to RootCAs instead.
+    metadata:
+      cwe: ["CWE-295"]
+      severity: critical
+      security-severity: "9.0"
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern: "tls.Config{..., InsecureSkipVerify: true, ...}"

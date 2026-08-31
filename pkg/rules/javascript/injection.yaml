@@ -1,0 +1,62 @@
+rules:
+  - id: dragon-js-sql-string-concat
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      SQL query built by string concatenation. If any concatenated value comes
+      from a request, this is SQL injection. Use parameterised queries: pass
+      values as bound parameters rather than splicing them into the string.
+    metadata:
+      cwe: ["CWE-89"]
+      severity: high
+      security-severity: "7.5"
+      category: security
+      confidence: HIGH
+      references:
+        - https://cwe.mitre.org/data/definitions/89.html
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query("..." + $X, ...)
+          - pattern: $DB.query(`...${$X}...`, ...)
+          - pattern: $DB.execute("..." + $X, ...)
+          - pattern: $DB.raw("..." + $X, ...)
+      # A concatenated literal is not user input; requiring a non-literal
+      # operand is what keeps this rule quiet enough to leave switched on.
+      - pattern-not: $DB.query("..." + "...", ...)
+
+  - id: dragon-js-command-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Shell command built from a variable. exec() runs its argument through a
+      shell, so any metacharacter in $X becomes a command. Use execFile() or
+      spawn() with an argument array, which never invokes a shell.
+    metadata:
+      cwe: ["CWE-78"]
+      severity: critical
+      security-severity: "9.0"
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: $CP.exec("..." + $X, ...)
+          - pattern: $CP.exec(`...${$X}...`, ...)
+          - pattern: $CP.execSync("..." + $X, ...)
+          - pattern: $CP.execSync(`...${$X}...`, ...)
+
+  - id: dragon-js-eval-on-variable
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      eval() on a non-literal value executes whatever it is given. If $X can be
+      influenced by input, this is remote code execution. There is almost
+      always a parser (JSON.parse) or a lookup table that does the real job.
+    metadata:
+      cwe: ["CWE-95"]
+      severity: critical
+      security-severity: "9.0"
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - pattern: eval($X)
+      - pattern-not: eval("...")

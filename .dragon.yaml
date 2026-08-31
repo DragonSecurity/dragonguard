@@ -1,0 +1,35 @@
+version: dragonguard/v1
+project: dragonguard
+
+# DragonGuard is a security gate that runs in CI with repository read access
+# and writes to a findings store. That makes it a supply-chain component for
+# everything it scans, so it is scored as production and critical rather than
+# as an internal tool.
+asset:
+  name: dragonguard
+  environment: production
+  criticality: critical
+  internet_exposed: false
+  handles_pii: false
+  handles_payments: false
+
+engines:
+  trivy:
+    enabled: true
+  opengrep:
+    enabled: true
+    rules:
+      - ./rules
+  gitleaks:
+    enabled: true
+
+policies:
+  - policies
+
+baseline: .dragon-baseline.yaml
+
+ignore:
+  - bin
+  - .git
+
+state_dir: .dragon
