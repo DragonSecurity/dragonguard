@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -90,12 +91,12 @@ reported as new and only what changes from here is gated.`,
 				return err
 			}
 
-			bl := calibrate(res, strict, allowExistingSecrets)
+			bl, ungated := calibrate(res, strict, allowExistingSecrets)
 			data, err := yaml.Marshal(bl)
 			if err != nil {
 				return err
 			}
-			header := calibrationHeader(res, strict)
+			header := calibrationHeader(res, strict, ungated)
 			if err := os.WriteFile(outPath, append([]byte(header), data...), 0o644); err != nil {
 				return err
 			}
@@ -110,7 +111,7 @@ reported as new and only what changes from here is gated.`,
 				return fmt.Errorf("record baseline snapshot: %w", err)
 			}
 
-			printCalibration(res, bl, outPath)
+			printCalibration(res, bl, outPath, ungated)
 			warnAboutSecrets(res, allowExistingSecrets)
 			return nil
 		},
@@ -136,7 +137,7 @@ reported as new and only what changes from here is gated.`,
 // override.
 const calibrationTolerance = 3
 
-func calibrate(res *report.Result, strict, allowExistingSecrets bool) *baseline.Baseline {
+func calibrate(res *report.Result, strict, allowExistingSecrets bool) (*baseline.Baseline, []string) {
 	sc := res.Scorecard
 	tolerance := float64(calibrationTolerance)
 	if strict {
@@ -156,12 +157,23 @@ func calibrate(res *report.Result, strict, allowExistingSecrets bool) *baseline.
 	// assessed. A floor on a dimension nobody scanned would be enforced
 	// against a number that means nothing.
 	bl.Dimensions = map[string]baseline.DimensionRule{}
+	var ungated []string
 	for _, name := range scorecard.Dimensions {
 		d, ok := sc.Dimensions[name]
 		if !ok || !d.Assessed {
 			continue
 		}
 		min := math.Max(0, math.Floor(d.Score-tolerance))
+
+		// A floor of zero is not a gate: no posture can fall below it, so
+		// writing one puts a line in the baseline that looks like protection
+		// and provides none. A dimension already at rock bottom is carried by
+		// the regression ratchet and the new-finding allowances instead, and
+		// the generated header says which dimensions were left out.
+		if min <= 0 {
+			ungated = append(ungated, name)
+			continue
+		}
 		rule := baseline.DimensionRule{Minimum: &min}
 		// Secrets is the one dimension worth holding at 100: there is no
 		// defensible number of live credentials in a repository, and a
@@ -212,10 +224,10 @@ func calibrate(res *report.Result, strict, allowExistingSecrets bool) *baseline.
 	// permitting it forever would let a broken engine hide behind the gate.
 	bl.AllowDegraded = false
 
-	return bl
+	return bl, ungated
 }
 
-func calibrationHeader(res *report.Result, strict bool) string {
+func calibrationHeader(res *report.Result, strict bool, ungated []string) string {
 	sc := res.Scorecard
 	mode := fmt.Sprintf("with a %d-point tolerance", calibrationTolerance)
 	if strict {
@@ -232,11 +244,29 @@ func calibrationHeader(res *report.Result, strict bool) string {
 #
 # %d findings were recorded as the baseline snapshot, so they are no longer
 # reported as new. Only what changes from here is gated.
-
-`, time.Now().UTC().Format("2006-01-02"), sc.Score, mode, sc.Counts.Total)
+%s
+`, time.Now().UTC().Format("2006-01-02"), sc.Score, mode, sc.Counts.Total, ungatedNote(ungated))
 }
 
-func printCalibration(res *report.Result, bl *baseline.Baseline, path string) {
+// ungatedNote explains any dimension deliberately left without a floor.
+//
+// Silence here would be worse than the zero floor it replaces: a reader who
+// notices a dimension missing from the list should be told it was a decision,
+// not an oversight.
+func ungatedNote(ungated []string) string {
+	if len(ungated) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(`#
+# No floor was set for: %s.
+#
+# Those dimensions currently score zero, and a floor of zero is not a gate --
+# nothing can fall below it. They are carried by the regression ratchet and
+# the new-finding allowances instead. Set a real floor once the backlog is
+# down far enough for one to mean something.`, strings.Join(ungated, ", "))
+}
+
+func printCalibration(res *report.Result, bl *baseline.Baseline, path string, ungated []string) {
 	sc := res.Scorecard
 	fmt.Printf("\nWrote %s\n\n", path)
 	fmt.Printf("  Calibrated posture floor   %.0f  (currently %.0f)\n", derefF(bl.MinimumScore), sc.Score)
@@ -254,6 +284,10 @@ func printCalibration(res *report.Result, bl *baseline.Baseline, path string) {
 				fmt.Printf("    %-14s %.0f%s\n", name, *r.Minimum, note)
 			}
 		}
+	}
+	if len(ungated) > 0 {
+		fmt.Printf("\n  No floor set for: %s\n", strings.Join(ungated, ", "))
+		fmt.Printf("    (scoring zero; a floor of zero cannot fail, so it would not be a gate)\n")
 	}
 	fmt.Printf("\n  Recorded %d findings as the baseline snapshot.\n", sc.Counts.Total)
 	// Only promise a pass when nothing uncalibratable is still outstanding.
