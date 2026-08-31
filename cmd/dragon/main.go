@@ -11,10 +11,13 @@ var version = "0.1.0-dev"
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
-		// Cobra has already printed the message; exit non-zero without
-		// repeating it.
+		// The root command sets SilenceErrors so a gate failure exits
+		// non-zero without printing a spurious "Error:" line over the
+		// verdict it just rendered. That silence covers real errors too, so
+		// they are printed here -- otherwise every failure that is not a
+		// gate verdict exits 2 with no explanation whatsoever.
 		if _, ok := err.(exitCoder); !ok {
-			fmt.Fprintln(os.Stderr)
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 		os.Exit(exitCodeFor(err))
 	}
