@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -30,12 +31,34 @@ type Client struct {
 	HTTP *http.Client
 }
 
+// defaultBasePath mirrors the server's own base.path default.
+//
+// What a person has -- and what the deployment runbook prints, and what goes
+// in DRAGON_SERVER -- is a server: "https://guard.example.com". Where the API
+// lives underneath that is the client's business, not something every CI
+// config should have to restate. A base URL that already carries a path is
+// left alone, which is the escape hatch for a server running on a different
+// base.path.
+const defaultBasePath = "/api/v1"
+
 func New(baseURL, key string) *Client {
 	return &Client{
-		BaseURL: strings.TrimRight(baseURL, "/"),
+		BaseURL: normalizeBaseURL(baseURL),
 		Key:     key,
 		HTTP:    &http.Client{Timeout: 60 * time.Second},
 	}
+}
+
+func normalizeBaseURL(raw string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if trimmed == "" {
+		return ""
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" || u.Path != "" {
+		return trimmed
+	}
+	return trimmed + defaultBasePath
 }
 
 // IngestRequest is a scan submission.
@@ -92,9 +115,9 @@ func (c *Client) Ingest(ctx context.Context, project string, req IngestRequest) 
 	if err != nil {
 		return nil, err
 	}
-	url := fmt.Sprintf("%s/projects/%s/scans", c.BaseURL, project)
+	endpoint := fmt.Sprintf("%s/projects/%s/scans", c.BaseURL, project)
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
