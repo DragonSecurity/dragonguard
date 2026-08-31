@@ -1,4 +1,8 @@
 bin/
+# `go build ./cmd/dragon` with no -o drops the binary in the repository root,
+# which is how a 23MB darwin executable reached main once. Ignore it by name
+# as well as by directory.
+/dragon
 coverage.out
 dragon.sarif
 dragon.md
