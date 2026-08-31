@@ -1,6 +1,6 @@
 module github.com/DragonSecurity/dragonguard
 
-go 1.25.14
+go 1.26.7
 
 require (
 	cel.dev/cel-go v0.32.0
