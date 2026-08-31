@@ -56,7 +56,11 @@ func SARIF(w io.Writer, r *Result) error {
 	}
 
 	rulesByID := map[string]sarifRule{}
-	var results []result
+	// Initialized rather than declared nil: a nil slice marshals to JSON null,
+	// and the SARIF schema requires results to be an array. A clean scan --
+	// the outcome most worth publishing -- would otherwise produce a document
+	// GitHub rejects with "results is not of a type(s) array".
+	results := []result{}
 
 	for _, f := range r.Findings {
 		if f.Status == finding.StatusAccepted || f.Status == finding.StatusIgnored {
