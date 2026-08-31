@@ -1,0 +1,56 @@
+rules:
+  - id: dragon-py-sql-string-format
+    languages: [python]
+    severity: ERROR
+    message: >-
+      SQL built with string formatting. Pass values as query parameters
+      instead - cursor.execute("... WHERE id = %s", (id,)) - so the driver
+      escapes them and the query structure stays fixed.
+    metadata:
+      cwe: ["CWE-89"]
+      severity: high
+      security-severity: "7.5"
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: $CUR.execute("..." % ...)
+          - pattern: $CUR.execute("...".format(...))
+          - pattern: $CUR.execute(f"...{$X}...")
+          - pattern: $CUR.execute("..." + $X)
+
+  - id: dragon-py-shell-true
+    languages: [python]
+    severity: ERROR
+    message: >-
+      subprocess with shell=True runs the command through a shell, so any
+      metacharacter in the argument becomes a command. Drop shell=True and pass
+      the command as a list.
+    metadata:
+      cwe: ["CWE-78"]
+      severity: critical
+      security-severity: "9.0"
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$FN(..., shell=True, ...)
+          - pattern: os.system($X)
+      - pattern-not: subprocess.$FN("...", shell=True, ...)
+
+  - id: dragon-py-yaml-unsafe-load
+    languages: [python]
+    severity: ERROR
+    message: >-
+      yaml.load() without a safe loader can construct arbitrary Python objects
+      and therefore execute code. Use yaml.safe_load().
+    metadata:
+      cwe: ["CWE-502"]
+      severity: critical
+      security-severity: "9.0"
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern: yaml.load($X)
+      - pattern-not: yaml.load($X, Loader=yaml.SafeLoader)
+      - pattern-not: yaml.load($X, yaml.SafeLoader)

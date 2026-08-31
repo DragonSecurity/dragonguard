@@ -1,0 +1,32 @@
+apiVersion: dragonguard/v1
+kind: PolicyPack
+metadata:
+  name: dragonguard-self
+  description: >-
+    Exemptions for DragonGuard's own repository. Narrow on purpose: this is
+    what a real exemption should look like, not a blanket ignore.
+
+rules:
+  # DragonGuard's secret-verification tests need credentials with genuine
+  # vendor prefixes -- ghp_, glpat-, sk_live_ -- because the whole point of
+  # the code under test is routing a credential to the provider that issued
+  # it. The bodies are self-describing placeholders, but the prefixes are real
+  # and secret scanners flag them, correctly.
+  #
+  # Scoped to one file and one category rather than "ignore test files". Test
+  # files are exactly where real credentials get committed: DragonGuard's first
+  # scan of another repository found a live private key in a _test.go file, and
+  # a blanket rule would have hidden it.
+  - id: verify-test-fixtures
+    description: Synthetic credential fixtures in the secret-verification tests.
+    match:
+      all:
+        - finding.category == "SECRET"
+        - finding.file == "pkg/verify/verify_test.go"
+    then:
+      decision: allow
+      exempt: true
+      tags: [test-fixture, reviewed]
+      message: >-
+        Placeholder credentials with real vendor prefixes, required to test
+        provider routing. Reviewed 2026-08-31.

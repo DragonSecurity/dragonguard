@@ -1,0 +1,100 @@
+# DragonGuard scanning its own repository.
+#
+# Two jobs on purpose: the gate runs on every push and blocks, while SARIF
+# upload runs separately so a blocked gate still publishes its findings to
+# code scanning. A gate that swallows the evidence when it fails is a gate
+# nobody can debug.
+name: DragonGuard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Gitleaks scans history; a shallow clone silently misses every
+          # credential that is not in the tip commit.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Install engines
+        run: |
+          set -euo pipefail
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+          curl -sfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/scripts/install.sh \
+            | sh -s -- -b /usr/local/bin || echo "gitleaks unavailable; scan will report the gap"
+
+      - name: Build
+        run: go build -o bin/dragon ./cmd/dragon
+
+      - name: Test
+        run: go test ./...
+
+      - name: Restore threat-intelligence and baseline state
+        uses: actions/cache@v4
+        with:
+          path: .dragon
+          # The baseline snapshot is what the regression gate compares
+          # against, so it has to outlive the runner. Restoring from main
+          # means a PR is measured against main, not against itself.
+          key: dragon-state-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            dragon-state-${{ github.ref_name }}-
+            dragon-state-main-
+
+      - name: Scan
+        id: scan
+        run: |
+          bin/dragon scan --format sarif --output dragon.sarif || echo "gate=blocked" >> "$GITHUB_OUTPUT"
+          bin/dragon scan --format markdown --output dragon.md --quiet || true
+          bin/dragon scan --quiet || exit 1
+
+      - name: Upload SARIF
+        if: always() && hashFiles('dragon.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: dragon.sarif
+          category: dragonguard
+
+      - name: Comment on the pull request
+        if: always() && github.event_name == 'pull_request' && hashFiles('dragon.md') != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('dragon.md', 'utf8');
+            const {owner, repo} = context.repo;
+            const issue_number = context.issue.number;
+
+            // Update the existing comment rather than adding one per push:
+            // a PR with twenty stale security comments gets muted.
+            const marker = 'DragonGuard';
+            const comments = await github.rest.issues.listComments({owner, repo, issue_number});
+            const mine = comments.data.find(c =>
+              c.user.type === 'Bot' && c.body.includes(marker));
+
+            if (mine) {
+              await github.rest.issues.updateComment({owner, repo, comment_id: mine.id, body});
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number, body});
+            }
+
+      - name: Record the baseline
+        # Only main advances the ratchet. Letting a branch record its own
+        # baseline would let a regression be laundered into the new normal.
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: bin/dragon scan --record --quiet || true

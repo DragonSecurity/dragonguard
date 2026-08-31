@@ -1,0 +1,41 @@
+rules:
+  - id: dragon-js-weak-hash-for-passwords
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      MD5 and SHA-1 are fast, which is exactly wrong for passwords: an attacker
+      with the hashes can try billions of guesses per second. Use a deliberately
+      slow, salted KDF - argon2, scrypt or bcrypt.
+    metadata:
+      cwe: ["CWE-916"]
+      severity: high
+      security-severity: "7.5"
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createHash("md5")
+          - pattern: crypto.createHash("sha1")
+
+  - id: dragon-js-insecure-random-for-secrets
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Math.random() is not cryptographically secure and its output is
+      predictable from a few samples. For tokens, session identifiers or reset
+      codes use crypto.randomBytes() or crypto.randomUUID().
+    metadata:
+      cwe: ["CWE-338"]
+      severity: high
+      security-severity: "7.5"
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $TOKEN = Math.random()
+          - pattern: |
+              $TOKEN = Math.random().toString($N)
+      - metavariable-regex:
+          metavariable: $TOKEN
+          regex: (?i).*(token|secret|key|nonce|salt|password|otp|session).*

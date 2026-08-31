@@ -1,0 +1,83 @@
+apiVersion: dragonguard/v1
+kind: PolicyPack
+metadata:
+  name: dragon-recommended
+  description: The rules that mean the same thing at every organization.
+
+rules:
+  # Policies decide what to do. They never do it -- an action is a name the
+  # enforcement layer resolves. That boundary is what stops a policy language
+  # turning into an integration runtime.
+
+  - id: active-credential-committed
+    description: A credential reached the repository.
+    when: finding.category == "SECRET"
+    then:
+      decision: deny
+      actions: [block_merge, notify_security, create_incident]
+      tags: [secret, rotate-now]
+      message: >-
+        A credential is present in the repository. Rotate it first: removing
+        the line does not un-disclose the key, and history keeps a copy.
+
+  - id: kev-in-production
+    description: Actively exploited vulnerability in a production asset.
+    when: threat.kev && asset.environment == "production"
+    then:
+      decision: deny
+      actions: [block_merge, create_ticket, notify_security]
+      risk_boost: 10
+      tags: [kev, must-fix]
+      message: This vulnerability is on CISA's Known Exploited Vulnerabilities list.
+
+  - id: reachable-critical-internet-facing
+    description: Critical, reachable, and exposed to the internet.
+    match:
+      all:
+        - risk.score >= 90
+        - analysis.reachable
+        - asset.internet_exposed
+    then:
+      decision: deny
+      actions: [block_merge, create_ticket]
+      tags: [urgent]
+
+  - id: high-risk-with-a-fix-available
+    description: High risk, and someone can close it today.
+    match:
+      all:
+        - risk.score >= 75
+        - analysis.fix_available
+        - finding.new
+    then:
+      decision: warn
+      actions: [annotate_pr]
+      tags: [fixable]
+      message: A fix is available for this finding.
+
+  - id: unmaintained-upstream-dependency
+    description: Poor upstream security posture, even with no known CVE.
+    match:
+      all:
+        - analysis.has_scorecard
+        - analysis.scorecard_score < 4.0
+    then:
+      decision: warn
+      actions: [annotate_pr]
+      tags: [supply-chain]
+      message: >-
+        This dependency has a weak OpenSSF Scorecard. No CVE exists today, but
+        the project's security practices make one more likely and slower to fix.
+
+  # Exemptions are policy too, and belong in the same reviewed file as the
+  # rules -- not in an ignore list nobody reads.
+  - id: accept-dev-only-medium-risk
+    description: Medium-risk findings in build-only dependencies are accepted.
+    match:
+      all:
+        - component.dev_only
+        - risk.score < 75
+    then:
+      decision: allow
+      exempt: true
+      tags: [accepted-dev-dependency]
