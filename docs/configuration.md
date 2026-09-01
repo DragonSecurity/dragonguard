@@ -147,6 +147,13 @@ Neither DAST engine will ever guess a target. Inferring one means sending
 traffic somewhere nobody authorised, and doing that on a `production` asset is
 worse than not scanning.
 
+Both DAST engines fall back to their official container when the CLI is not on
+`PATH` — `ghcr.io/zaproxy/zaproxy:stable` and `schemathesis/schemathesis:stable`
+— so `docker` alone is enough to make them available. The other four engines
+are `PATH`-only; see the README for why. One consequence: `localhost` inside a
+container is the container, so a target pointing at a service on your own host
+will not resolve through the fallback.
+
 ## `enabled` and the shape of an engine block
 
 `enabled` defaults to **true** when the key is present but unset, so:

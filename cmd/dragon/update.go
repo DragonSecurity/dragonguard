@@ -322,6 +322,12 @@ func isDevBuild(s string) bool {
 	if strings.Contains(v, "-dev") || v == "" || v == "dev" {
 		return true
 	}
+	// Build metadata after a "+" is what Go appends to a VCS-derived version
+	// for a dirty working tree. It is a real commit but not a release, and
+	// telling somebody they are "0.3.0+dirty -> 0.3.0" reads like a downgrade.
+	if strings.Contains(v, "+") {
+		return true
+	}
 	// A stamped release version starts with a number; anything else came from
 	// a local build.
 	if _, err := strconv.Atoi(strings.SplitN(v, ".", 2)[0]); err != nil {

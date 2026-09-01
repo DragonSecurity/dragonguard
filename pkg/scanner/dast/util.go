@@ -5,16 +5,6 @@ import (
 	"path/filepath"
 )
 
-func tempReport(pattern string) (path string, cleanup func(), err error) {
-	f, err := os.CreateTemp("", pattern)
-	if err != nil {
-		return "", func() {}, err
-	}
-	name := f.Name()
-	f.Close()
-	return name, func() { os.Remove(name) }, nil
-}
-
 // tempReportDir creates a directory holding nothing but the report.
 //
 // The docker path bind-mounts this into the scanner container, and mounting
@@ -22,9 +12,10 @@ func tempReport(pattern string) (path string, cleanup func(), err error) {
 // directory -- every unrelated temp file on the machine, handed to a
 // container whose whole job is to attack things.
 //
-// It is chmod 0777 because the container runs as its own uid (zap is 1000)
-// which will not match the host user, so a 0700 directory is one the scanner
-// cannot write its report into. The directory exists for one file for the
+// It is chmod 0777 because each container runs as its own non-root uid --
+// zap as 1000, schemathesis as its own user -- and neither will match the
+// host user, so a 0700 directory is one the scanner cannot write its report
+// into. The directory exists for one file for the
 // length of one scan and is removed afterwards.
 func tempReportDir(name string) (path string, cleanup func(), err error) {
 	dir, err := os.MkdirTemp("", "dragon-dast-*")

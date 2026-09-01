@@ -2,6 +2,8 @@ package dast
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -97,11 +99,11 @@ func TestZAPSeverityMapping(t *testing.T) {
 }
 
 func TestSchemathesisOnlyReportsFailures(t *testing.T) {
-	report := `{"results":[{"method":"GET","path":"/users/{id}","checks":[
-	  {"name":"not_a_server_error","value":"failure","message":"Received 500"},
-	  {"name":"status_code_conformance","value":"success","message":""},
-	  {"name":"response_schema_conformance","value":"failure","message":"missing field"}
-	]}]}`
+	// Schemathesis 4's NDJSON: one event per line, results only in
+	// ScenarioFinished, checks keyed by case ID.
+	report := `{"EngineStarted":{}}
+{"ScenarioFinished":{"status":"failure","recorder":{"label":"GET /users/{id}","checks":{"c1":[{"name":"not_a_server_error","status":"failure","failure_info":{"failure":{"type":"ServerError","operation":"GET /users/{id}","title":"Server error","message":"Received 500","severity":"critical"}}},{"name":"status_code_conformance","status":"success"},{"name":"response_schema_conformance","status":"failure","failure_info":{"failure":{"type":"SchemaMismatch","operation":"GET /users/{id}","title":"Schema mismatch","message":"missing field","severity":"low"}}}]},"interactions":{"c1":{"request":{"method":"GET","uri":"https://api.example.com/users/1"},"response":{"status_code":500}}}}}}
+{"EngineFinished":{}}`
 
 	got, err := parseSchemathesisReport([]byte(report), "https://api.example.com")
 	if err != nil {
@@ -110,12 +112,84 @@ func TestSchemathesisOnlyReportsFailures(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d findings, want 2 (a passing check is not a finding)", len(got))
 	}
-	// A 500 on schema-valid input outranks a contract mismatch.
-	if got[0].Severity != finding.SeverityHigh {
-		t.Errorf("server error severity = %s, want high", got[0].Severity)
+
+	bySeverity := map[finding.Severity]finding.Finding{}
+	for _, f := range got {
+		bySeverity[f.Severity] = f
 	}
-	if got[1].Severity != finding.SeverityLow {
-		t.Errorf("schema conformance severity = %s, want low", got[1].Severity)
+	// Schemathesis rates its own failures; "critical" must not be flattened
+	// to the name-based table's "high".
+	crit, ok := bySeverity[finding.SeverityCritical]
+	if !ok {
+		t.Fatalf("the reported critical severity was not used: %+v", got)
+	}
+	if crit.Location.File != "https://api.example.com/users/1" {
+		t.Errorf("location = %q, want the URI actually requested", crit.Location.File)
+	}
+	if crit.Metadata["status_code"] != 500 {
+		t.Errorf("status_code = %v, want 500", crit.Metadata["status_code"])
+	}
+	if _, ok := bySeverity[finding.SeverityLow]; !ok {
+		t.Errorf("a schema mismatch should stay low: %+v", got)
+	}
+}
+
+// The same check fails across every generated case, so findings are collapsed
+// and the repetitions counted. Without this a single server error arrives as
+// a hundred copies of itself and buries everything else.
+func TestSchemathesisCollapsesRepeatedFailures(t *testing.T) {
+	line := func(caseID string) string {
+		return `{"ScenarioFinished":{"status":"failure","recorder":{"label":"GET /boom","checks":{"` + caseID + `":[` +
+			`{"name":"not_a_server_error","status":"failure","failure_info":{"failure":{"type":"ServerError","operation":"GET /boom","title":"Server error","message":"","severity":"critical"}}}` +
+			`]},"interactions":{"` + caseID + `":{"request":{"method":"GET","uri":"https://api.example.com/boom"},"response":{"status_code":500}}}}}}`
+	}
+	got, err := parseSchemathesisReport([]byte(line("a")+"\n"+line("b")+"\n"+line("c")), "https://api.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1 collapsed finding", len(got))
+	}
+	if got[0].Metadata["occurrences"] != 3 {
+		t.Errorf("occurrences = %v, want 3", got[0].Metadata["occurrences"])
+	}
+}
+
+// A report captured from a real schemathesis 4 run against a deliberately
+// broken endpoint. Hand-written fixtures encode what I believed the format
+// to be; this one encodes what it is.
+func TestSchemathesisParsesARealReport(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "schemathesis-v4.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseSchemathesisReport(data, "http://host.docker.internal:8731")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("no findings parsed from a run that reported 4 failures")
+	}
+	var sawServerError bool
+	for _, f := range got {
+		if f.Scanner != "schemathesis" || f.Category != finding.CategoryDAST {
+			t.Errorf("wrong scanner/category: %+v", f)
+		}
+		if f.Title == "" {
+			t.Errorf("finding with no title: %+v", f)
+		}
+		if !f.Analysis.Reachable {
+			t.Error("a DAST finding was produced by reaching the endpoint; it is reachable by definition")
+		}
+		if f.Metadata["check"] == "not_a_server_error" {
+			sawServerError = true
+			if f.Severity != finding.SeverityCritical {
+				t.Errorf("server error severity = %s, want the reported critical", f.Severity)
+			}
+		}
+	}
+	if !sawServerError {
+		t.Errorf("the 500 was not reported; got %d findings", len(got))
 	}
 }
 

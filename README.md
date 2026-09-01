@@ -69,10 +69,15 @@ Or take a binary from [releases](https://github.com/DragonSecurity/dragonguard/r
 -- linux and darwin, amd64 and arm64, with checksums -- if you would rather not
 have a Go toolchain in the way.
 
-Build from source only when working on dragon itself. `go build` leaves the
-version unstamped, and that version is reported in every SARIF file and every
-scan the platform ingests, so a locally built binary produces findings that
-cannot say which engine found them.
+Either install path produces a version-stamped binary: releases carry it from
+the linker, and `go install ...@v0.3.0` recovers it from the module version.
+That matters because the version is reported in every SARIF file and every
+scan the platform ingests, and a finding that cannot say which build produced
+it is a finding nobody can reproduce.
+
+A `go build` inside a checkout is stamped too, from VCS -- `0.3.0+dirty` for a
+tagged tree with uncommitted changes. It is honest about being unreleased,
+which is the point.
 
 Once installed, `dragon update` replaces the binary with the latest release.
 It verifies the archive's SHA-256 against the checksums published with that
@@ -288,6 +293,35 @@ could not look is not a gate.
 | deps.dev | OpenSSF Scorecard, dependency graph, versions | implemented |
 | OWASP ZAP | DAST | implemented |
 | Schemathesis | API property testing | implemented |
+
+### How engines are found, and which fall back to Docker
+
+Engines are installed separately and looked up on `PATH`; `dragon engines`
+reports which are actually available here, and a missing one degrades a scan
+rather than failing it.
+
+**The two DAST engines fall back to their official container** when the CLI is
+absent, because that is how most people have them: ZAP via
+`ghcr.io/zaproxy/zaproxy:stable`, Schemathesis via
+`schemathesis/schemathesis:stable`. Nothing needs configuring — if `docker` is
+on `PATH`, they are available.
+
+**The other four do not**, and the reason is worth stating rather than
+discovering. ZAP and Schemathesis take a *URL*: the only thing crossing the
+container boundary is the report file. Trivy, gitleaks, osv-scanner and
+OpenGrep scan the *filesystem*, so containerising them means mounting the
+repository and translating every path in the results back to host paths. Get
+that translation wrong and the paths in findings shift, which shifts their
+fingerprints, which makes the regression gate report the entire existing
+backlog as new on its first containerised run — and a gate that cries wolf
+once is a gate nobody reads again. It is worth doing; it is not a copy of the
+fifteen lines that made ZAP work.
+
+A container target is not a mount. `localhost` inside a container is the
+container, so a DAST target pointing at a service on your host will not
+resolve. Point it at a reachable hostname; the target URL is never silently
+rewritten, because a connection refused you can read beats traffic sent
+somewhere you did not choose.
 
 Adding an engine means implementing one interface:
 

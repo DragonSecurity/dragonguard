@@ -4,12 +4,49 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
+	"strings"
 )
 
-// version is overridden at build time with -ldflags.
-var version = "0.1.0-dev"
+// devVersion is what a build carries when nothing stamped it.
+const devVersion = "0.1.0-dev"
+
+// version is overridden at build time with -ldflags, or resolved from the
+// module version by resolveVersion.
+var version = devVersion
+
+// resolveVersion recovers the version of a `go install module@version` build.
+//
+// Only a release build passes -ldflags, so `go install ...@v0.3.0` used to
+// produce a binary that called itself 0.1.0-dev forever -- while the README
+// recommended exactly that install. The version is stamped into every SARIF
+// file and every scan the platform ingests, so the result was findings that
+// could not say which build produced them, from the documented install path.
+//
+// Go records the module version in the build info for a versioned install, so
+// it is available without the linker flag. A local `go build` inside the
+// repository gets a VCS-derived version instead -- "0.3.0+dirty" for a tagged
+// tree with uncommitted changes, a pseudo-version between tags -- which is
+// strictly more useful than the "0.1.0-dev" it replaces, because it says
+// which commit produced the finding. Only a build with no VCS information at
+// all records "(devel)", and that one really is anonymous.
+func resolveVersion() {
+	if version != devVersion {
+		return // -ldflags won; it is the more specific answer
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	v := info.Main.Version
+	if v == "" || v == "(devel)" {
+		return
+	}
+	version = strings.TrimPrefix(v, "v")
+}
 
 func main() {
+	resolveVersion()
 	if err := newRootCmd().Execute(); err != nil {
 		// The root command sets SilenceErrors so a gate failure exits
 		// non-zero without printing a spurious "Error:" line over the
