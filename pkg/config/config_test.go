@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -103,5 +104,91 @@ func TestEngineEnabledDefaultsToTrue(t *testing.T) {
 	}
 	if c.Engines["opengrep"].IsEnabled() {
 		t.Error("enabled: false must disable the engine")
+	}
+}
+
+// The configuration reference is only worth having if it is true. This parses
+// the complete example out of docs/configuration.md and loads it through the
+// real loader, so a field that gets renamed, removed or newly validated fails
+// here rather than in the first user's terminal.
+func TestDocumentedExampleConfigStillLoads(t *testing.T) {
+	md, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	if err != nil {
+		t.Fatalf("read the configuration reference: %v", err)
+	}
+	_, block, ok := strings.Cut(string(md), "```yaml\n")
+	if !ok {
+		t.Fatal("docs/configuration.md has no yaml example")
+	}
+	block, _, ok = strings.Cut(block, "```")
+	if !ok {
+		t.Fatal("the yaml example in docs/configuration.md is unterminated")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".dragon.yaml")
+	if err := os.WriteFile(path, []byte(block), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path, dir)
+	if err != nil {
+		t.Fatalf("the documented example does not load: %v", err)
+	}
+
+	// Spot-check the fields the document makes specific claims about.
+	if cfg.Asset.Environment != "production" || cfg.Asset.Criticality != "critical" {
+		t.Errorf("asset context did not survive the round trip: %+v", cfg.Asset)
+	}
+	if !cfg.Asset.InternetExposed || !cfg.Asset.HandlesPII {
+		t.Error("asset booleans did not load")
+	}
+	for _, name := range []string{"trivy", "opengrep", "gitleaks", "osv", "zap", "schemathesis"} {
+		if got, ok := cfg.Engines[name]; !ok || !got.IsEnabled() {
+			t.Errorf("engine %s should be present and enabled", name)
+		}
+	}
+	// The two-entry schemathesis shape is the document's headline warning.
+	if got := cfg.Engines["schemathesis"].Rules; len(got) != 2 {
+		t.Errorf("schemathesis rules = %v, want two entries", got)
+	}
+	if got := cfg.Engines["zap"].Rules; len(got) != 1 {
+		t.Errorf("zap rules = %v, want one entry", got)
+	}
+	if cfg.ScanIgnoredFiles || cfg.VerifySecrets || cfg.Offline {
+		t.Error("the documented switches should all be false")
+	}
+}
+
+// The reference documents a second, shorter engines block to show that a
+// present-but-unset key is enabled and that `enabled: false` is the only way
+// to turn an engine off. Both claims are load-bearing, so both are checked
+// against the loader rather than trusted.
+func TestDocumentedEnabledShorthandBehavesAsDocumented(t *testing.T) {
+	md, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := strings.Split(string(md), "```yaml\n")
+	if len(blocks) < 3 {
+		t.Fatal("expected a second yaml example in docs/configuration.md")
+	}
+	block, _, ok := strings.Cut(blocks[2], "```")
+	if !ok {
+		t.Fatal("the second yaml example is unterminated")
+	}
+
+	dir := t.TempDir()
+	cfg, err := Load(write(t, dir, ".dragon.yaml", "version: dragonguard/v1\n"+block), dir)
+	if err != nil {
+		t.Fatalf("the documented shorthand does not load: %v", err)
+	}
+	if got := cfg.Engines["trivy"]; !got.IsEnabled() {
+		t.Error("enabled: true should be enabled")
+	}
+	if got, ok := cfg.Engines["gitleaks"]; !ok || !got.IsEnabled() {
+		t.Error("an engine block with no enabled key should be enabled")
+	}
+	if got := cfg.Engines["osv"]; got.IsEnabled() {
+		t.Error("enabled: false should turn an engine off")
 	}
 }

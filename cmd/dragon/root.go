@@ -35,6 +35,7 @@ engine and the gate are the product.`,
 		newFindingsCmd(),
 		newInitCmd(),
 		newEnginesCmd(),
+		newUpdateCmd(),
 	)
 	return cmd
 }
