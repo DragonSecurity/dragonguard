@@ -59,11 +59,24 @@ That layer is four things:
       PASS   WARN  BLOCK
 ```
 
+## Install
+
+```sh
+go install github.com/DragonSecurity/dragonguard/cmd/dragon@latest
+```
+
+Or take a binary from [releases](https://github.com/DragonSecurity/dragonguard/releases)
+-- linux and darwin, amd64 and arm64, with checksums -- if you would rather not
+have a Go toolchain in the way.
+
+Build from source only when working on dragon itself. `go build` leaves the
+version unstamped, and that version is reported in every SARIF file and every
+scan the platform ingests, so a locally built binary produces findings that
+cannot say which engine found them.
+
 ## Quick start
 
 ```sh
-go build -o bin/dragon ./cmd/dragon
-
 dragon init          # .dragon.yaml, a baseline, a policy pack
 dragon engines       # what can actually run here
 dragon scan          # scan, score, gate
@@ -325,10 +338,15 @@ engines:
 ## CI
 
 ```yaml
+- run: go install github.com/DragonSecurity/dragonguard/cmd/dragon@latest
 - run: dragon scan --format sarif --output dragon.sarif
 - uses: github/codeql-action/upload-sarif@v3
   with: {sarif_file: dragon.sarif}
 ```
+
+The engines dragon drives are installed separately; `dragon engines` reports
+which of them it can find, and a scan says which were missing rather than
+quietly scoring as though nothing was wrong.
 
 Dragon Risk is carried in SARIF's `security-severity` rather than the `level`
 field, because `level` has three values and the argument of this whole platform
