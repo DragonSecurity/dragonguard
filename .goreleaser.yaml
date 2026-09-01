@@ -1,0 +1,64 @@
+# goreleaser builds the dragon CLI for the platforms people actually run CI on.
+#
+# The version matters more than it looks. It is stamped into main.version, which
+# becomes report.Version -- so it appears in every SARIF file and every scan the
+# platform ingests. An unstamped binary reports "0.1.0-dev" forever, and a
+# finding that cannot say which engine produced it is a finding nobody can
+# reproduce.
+version: 2
+
+project_name: dragonguard
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: dragon
+    main: ./cmd/dragon
+    binary: dragon
+    # No cgo anywhere in the tree, so every target cross-compiles from one
+    # runner and the binaries are static.
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: dragon
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      # Apache 2.0 requires the licence to travel with the binary.
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore\\(deps\\):"
+
+release:
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```sh
+    go install github.com/DragonSecurity/dragonguard/cmd/dragon@{{ .Tag }}
+    ```
+
+    or download a binary above. The scanners it drives -- Trivy, gitleaks,
+    osv-scanner and opengrep -- are installed separately; `dragon engines`
+    reports which of them it can find.
