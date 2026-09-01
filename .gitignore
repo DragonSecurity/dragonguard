@@ -11,3 +11,6 @@ dragon.md
 # per-machine and per-branch, and committing it would make one developer's
 # local scan the baseline everybody else is measured against.
 .dragon/
+
+# goreleaser build output
+dist/
