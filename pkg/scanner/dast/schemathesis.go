@@ -36,8 +36,17 @@ func (s *Schemathesis) Categories() []finding.Category {
 
 func (s *Schemathesis) Available(ctx context.Context, t scanner.Target) (bool, string) {
 	schema, baseURL := s.configFor(t)
-	if schema == "" || baseURL == "" {
-		return false, "no schema/base URL configured (set engines.schemathesis.rules)"
+	switch {
+	case schema == "" && baseURL == "":
+		return false, "no schema/base URL configured (set engines.schemathesis.rules to [<openapi-schema>, <base-url>])"
+	case baseURL == "":
+		// Distinguished because the previous message said "not configured" to
+		// somebody who had configured it, and sent them to look at a setting
+		// that was already there. One entry is the easy mistake: zap takes a
+		// single URL, so the same shape reads as complete here.
+		return false, "engines.schemathesis.rules needs two entries, [<openapi-schema>, <base-url>]; only one is set"
+	case schema == "":
+		return false, "engines.schemathesis.rules is missing the schema URL; it takes [<openapi-schema>, <base-url>]"
 	}
 	_, ok, reason := scanner.LookPath("schemathesis")
 	if ok {
