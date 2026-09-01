@@ -74,6 +74,12 @@ version unstamped, and that version is reported in every SARIF file and every
 scan the platform ingests, so a locally built binary produces findings that
 cannot say which engine found them.
 
+Once installed, `dragon update` replaces the binary with the latest release.
+It verifies the archive's SHA-256 against the checksums published with that
+release before writing anything, and refuses to touch a binary that Homebrew
+or Nix installed, since overwriting one in place leaves the manager convinced
+it installed a version that is no longer there.
+
 ## Quick start
 
 ```sh
@@ -86,6 +92,10 @@ dragon scan --record # record the baseline the ratchet compares against
 Exit status is the verdict: `0` for pass or warn, `1` for block, `2` when the
 scan itself could not complete. A scan that could not run is deliberately not
 the same as a scan that found nothing.
+
+`dragon init` writes a short config. [docs/configuration.md](docs/configuration.md)
+is the full reference -- every field, and the ones that are easy to get wrong,
+starting with `rules` meaning something different in each engine.
 
 ## What a scan looks like
 
@@ -377,6 +387,8 @@ dragon findings show <cve|fingerprint>
 
 dragon engines                  what can run here
 dragon init                     scaffold a project
+dragon update                   replace this binary with the latest release
+dragon update --check           report whether a newer release exists
 
 dragon baseline calibrate       scan, then write a baseline this project can pass
 dragon push                     scan and submit to a DragonGuard server
