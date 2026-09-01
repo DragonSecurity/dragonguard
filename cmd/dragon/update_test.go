@@ -154,7 +154,7 @@ func TestVersionComparisonIgnoresTheTagPrefix(t *testing.T) {
 }
 
 func TestDevBuildsAreRecognized(t *testing.T) {
-	for _, v := range []string{"0.1.0-dev", "dev", "", "unknown"} {
+	for _, v := range []string{"0.1.0-dev", "dev", "", "unknown", "0.3.0+dirty"} {
 		if !isDevBuild(v) {
 			t.Errorf("isDevBuild(%q) = false", v)
 		}
