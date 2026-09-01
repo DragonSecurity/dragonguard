@@ -85,7 +85,7 @@ func (z *ZAP) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding, er
 		return nil, err
 	}
 
-	report, cleanup, err := tempReport("dragon-zap-*.json")
+	report, cleanup, err := tempReportDir("zap-report.json")
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,15 @@ func (z *ZAP) command(target, report string) (args []string, bin string, err err
 		dir := "/zap/wrk"
 		return []string{
 			"run", "--rm",
-			"-v", fmt.Sprintf("%s:%s", tempDir(report), dir),
+			// Only the report directory, never the parent of a file made by
+			// os.CreateTemp -- that is the system temp directory, and this
+			// container's whole job is to attack things.
+			"-v", fmt.Sprintf("%s:%s:rw", tempDir(report), dir),
+			// ZAP resolves -J against its working directory, which in the
+			// image is not the mount. Without this it writes the report
+			// somewhere the host never sees and the scan ends with "zap
+			// produced no report" while ZAP itself reports success.
+			"-w", dir,
 			"ghcr.io/zaproxy/zaproxy:stable",
 			script, "-t", target, "-J", baseName(report), "-I",
 		}, p, nil
