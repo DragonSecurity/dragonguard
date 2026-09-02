@@ -1,6 +1,6 @@
 # Deliberately bad. Each line here is a trivy misconfiguration check that must
 # keep firing.
-FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
 
 # DS002: runs as root
 USER root
