@@ -24,10 +24,15 @@ concurrency:
 
 env:
   # Pinned, because a scanner that changes underneath you changes every
-  # verdict it produces.
+  # verdict it produces. The "# renovate:" comments are what let Renovate see
+  # these -- without one, a pin is an opaque string and drifts by hand.
+  # renovate: datasource=github-releases depName=aquasecurity/trivy
   TRIVY_VERSION: "0.74.0"
+  # renovate: datasource=github-releases depName=gitleaks/gitleaks
   GITLEAKS_VERSION: "8.30.1"
+  # renovate: datasource=github-releases depName=google/osv-scanner
   OSV_VERSION: "2.5.1"
+  # renovate: datasource=github-releases depName=opengrep/opengrep
   OPENGREP_VERSION: "1.29.0"
 
 jobs:
