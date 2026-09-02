@@ -85,6 +85,11 @@ policies:
 # The baseline is the gate. Without one, a scan reports and never blocks.
 baseline: .dragon-baseline.yaml
 
+# The branch the regression gate compares against. Detected when unset:
+# origin/HEAD, then a local main or master. See "What the regression gate
+# compares against" below.
+# default_branch: main
+
 # Path globs excluded from every engine. See "What ignore: actually
 # excludes" below for how a pattern is matched.
 ignore:
@@ -201,6 +206,27 @@ the next engine added.
 Anything excluded this way is counted in the scan output on an `ignore` line,
 for the same reason gitignored findings are: a filter you cannot see is
 indistinguishable from a scanner that missed something.
+
+## What the regression gate compares against
+
+The **default branch**, always -- not the branch being scanned.
+
+The question a gate is asked on a pull request is *does merging this make main
+worse*, and only main's baseline can answer it. A branch measured against its
+own last scan answers a different question -- *is this worse than it was an
+hour ago* -- which a branch that is already below main passes trivially. A
+five-point drop against main reads as `+0` against itself, and
+`maximum_regression: 3` never fires.
+
+So `dragon scan` on a feature branch loads the snapshot recorded for the
+default branch. `dragon scan --record` still writes a snapshot named after the
+branch it ran on, and says so when that is not the default branch, because
+recording on a feature branch looks like it has set the bar and does not.
+
+When no snapshot exists for the default branch, every configured regression
+rule is reported as `--  not evaluated: no baseline recorded` rather than as a
+passing check. It does not block -- a first scan cannot regress -- but a
+constraint that has never once run must not read as a green tick.
 
 ## The baseline is a separate file
 
