@@ -174,8 +174,23 @@ func writeCredentialFixture(t *testing.T, dir string) {
 	t.Helper()
 
 	const (
-		idAlphabet     = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-		secretAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/+"
+		idAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+		// Alphanumeric, though a real AWS secret is base64 and does contain
+		// "/" and "+". Either character anywhere in the value stops gitleaks'
+		// generic-api-key rule matching -- it then reports nothing at all for
+		// the file -- and because this fixture is redrawn on every run, that
+		// made this test fail intermittently on a corpus nobody had touched.
+		//
+		// Measured against gitleaks 8.30.1: 4 misses in 120 draws with "/+"
+		// in the alphabet, 0 in 240 without. Trivy's aws-secret-access-key
+		// still matches either way, so the corpus goes on asserting what it
+		// was written to assert.
+		//
+		// Worth the loss of realism because of what this test is for. A
+		// regression detector that cries wolf at three percent teaches
+		// everyone to re-run it, which is exactly how a real regression gets
+		// waved through.
+		secretAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 	)
 	pick := func(alphabet string, n int) string {
 		b := make([]byte, n)
