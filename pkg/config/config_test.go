@@ -240,3 +240,71 @@ func TestALicenceCannotBeBothAllowedAndDenied(t *testing.T) {
 		t.Error("a licence listed in both allow and deny was accepted")
 	}
 }
+
+// The documented example is the thing most people copy, and it drifted: it
+// claimed to set every field while two of them sat commented out, which left
+// it ambiguous whether `licenses` was top level or belonged under an engine.
+// Documentation that is not executed is documentation that is eventually
+// wrong, so the reference's own example is loaded here as a config.
+func TestTheDocumentedExampleIsAValidConfig(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	if err != nil {
+		t.Fatalf("read the configuration reference: %v", err)
+	}
+	block := yamlBlockAfter(t, string(raw), "## A complete example")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".dragon.yaml")
+	if err := os.WriteFile(path, []byte(block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path, dir)
+	if err != nil {
+		t.Fatalf("the documented example does not load: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the documented example does not validate: %v", err)
+	}
+
+	// Loading proves it parses. These prove the documented keys reach real
+	// fields: a misspelled key unmarshals to nothing and would pass silently.
+	if cfg.DefaultBranch == "" {
+		t.Error("default_branch in the example did not reach Config.DefaultBranch")
+	}
+	if len(cfg.Licenses.Allow) == 0 || cfg.Licenses.Allow[0].ID == "" {
+		t.Error("licenses.allow in the example did not reach Config.Licenses; is it nested under the wrong key?")
+	}
+	if len(cfg.Licenses.Deny) == 0 {
+		t.Error("licenses.deny in the example did not reach Config.Licenses")
+	}
+	if len(cfg.Ignore) == 0 {
+		t.Error("ignore in the example did not reach Config.Ignore")
+	}
+	if len(cfg.Engines) == 0 {
+		t.Error("engines in the example did not reach Config.Engines")
+	}
+	if cfg.Asset.Environment == "" || cfg.Asset.Criticality == "" {
+		t.Error("asset context in the example did not reach Config.Asset")
+	}
+}
+
+// yamlBlockAfter returns the first fenced yaml block following a heading.
+func yamlBlockAfter(t *testing.T, doc, heading string) string {
+	t.Helper()
+	i := strings.Index(doc, heading)
+	if i < 0 {
+		t.Fatalf("heading %q is not in the reference any more", heading)
+	}
+	rest := doc[i:]
+	start := strings.Index(rest, "```yaml\n")
+	if start < 0 {
+		t.Fatalf("no yaml block follows %q", heading)
+	}
+	rest = rest[start+len("```yaml\n"):]
+	end := strings.Index(rest, "```")
+	if end < 0 {
+		t.Fatalf("unterminated yaml block after %q", heading)
+	}
+	return rest[:end]
+}

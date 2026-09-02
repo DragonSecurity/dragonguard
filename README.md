@@ -13,6 +13,12 @@ Scorecards tell you where you stand.
 Baselines determine whether you can ship.
 ```
 
+**[docs/configuration.md](docs/configuration.md)** is the `.dragon.yaml`
+reference: a complete example with every field at the indentation it actually
+takes, then the ones that are easy to get wrong -- `rules` meaning something
+different in each engine, what `ignore:` really excludes, what the regression
+gate compares against, and how to approve a licence.
+
 ## The idea
 
 Building a Snyk-shaped product is not "write a vulnerability scanner". Trivy,

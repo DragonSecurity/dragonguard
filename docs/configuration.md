@@ -11,8 +11,13 @@ silently understates real risk on every unconfigured repository.
 
 ## A complete example
 
-Every field below is optional except `version`. This example sets all of them
-so there is one place to see them together; a real config is much shorter.
+Every field below is optional except `version`. This example sets **all** of
+them, uncommented and at the indentation they actually take, so there is one
+place to see both what exists and where it goes; a real config is much shorter.
+
+The top-level keys are `version`, `project`, `asset`, `engines`, `policies`,
+`baseline`, `default_branch`, `licenses`, `ignore`, `state_dir`, and the
+switches at the end. Anything not in that list belongs inside one of them.
 
 ```yaml
 version: dragonguard/v1
@@ -88,14 +93,23 @@ baseline: .dragon-baseline.yaml
 # The branch the regression gate compares against. Detected when unset:
 # origin/HEAD, then a local main or master. See "What the regression gate
 # compares against" below.
-# default_branch: main
+default_branch: main
 
-# Standing decisions about dependency licences. Every entry needs a reason.
-# See "Approving a licence" below.
-# licenses:
-#   allow:
-#     - id: MPL-2.0
-#       reason: consumed unmodified; MPL obligations attach to modified files
+# ---------------------------------------------------------------------------
+# Standing decisions about dependency licences. Top level, not under an
+# engine: the decision is the project's, and it holds whichever engine
+# reported the licence. Every entry needs a reason -- see "Approving a
+# licence" below for why that is required rather than optional.
+# ---------------------------------------------------------------------------
+licenses:
+  allow:
+    - id: MPL-2.0
+      reason: >-
+        Consumed unmodified. The obligation attaches to modified MPL files and
+        we vendor and patch none of them. Revisit if any is ever forked.
+  deny:
+    - id: AGPL-3.0
+      reason: We ship a hosted service; the network clause is not acceptable here.
 
 # Path globs excluded from every engine. See "What ignore: actually
 # excludes" below for how a pattern is matched.
