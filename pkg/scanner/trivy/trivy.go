@@ -46,20 +46,25 @@ func (s *Scanner) Available(ctx context.Context, t scanner.Target) (bool, string
 
 // report mirrors the subset of Trivy's JSON output we consume.
 type report struct {
-	SchemaVersion int    `json:"SchemaVersion"`
-	ArtifactName  string `json:"ArtifactName"`
-	ArtifactType  string `json:"ArtifactType"`
-	Results       []struct {
-		Target string `json:"Target"`
-		Class  string `json:"Class"`
-		Type   string `json:"Type"`
+	SchemaVersion int      `json:"SchemaVersion"`
+	ArtifactName  string   `json:"ArtifactName"`
+	ArtifactType  string   `json:"ArtifactType"`
+	Results       []result `json:"Results"`
+}
 
-		Packages          []pkgEntry      `json:"Packages"`
-		Vulnerabilities   []vulnerability `json:"Vulnerabilities"`
-		Misconfigurations []misconfig     `json:"Misconfigurations"`
-		Secrets           []secret        `json:"Secrets"`
-		Licenses          []license       `json:"Licenses"`
-	} `json:"Results"`
+// result is one scanned target. Trivy emits several per target: the lang-pkgs
+// result carries the package inventory and the vulnerabilities, and a separate
+// license result carries the licences with no Packages and an empty Type.
+type result struct {
+	Target string `json:"Target"`
+	Class  string `json:"Class"`
+	Type   string `json:"Type"`
+
+	Packages          []pkgEntry      `json:"Packages"`
+	Vulnerabilities   []vulnerability `json:"Vulnerabilities"`
+	Misconfigurations []misconfig     `json:"Misconfigurations"`
+	Secrets           []secret        `json:"Secrets"`
+	Licenses          []license       `json:"Licenses"`
 }
 
 // pkgEntry is one component from Trivy's package inventory. Trivy already
@@ -241,6 +246,14 @@ func (s *Scanner) ScanWithGraph(ctx context.Context, t scanner.Target) ([]findin
 	var findings []finding.Finding
 	graph := scanner.NewPackageGraph()
 
+	// Licences arrive in their own Result -- Class "license", Type empty, no
+	// Packages -- separate from the lang-pkgs Result that carries the
+	// inventory for the same Target. Indexed here so a licence finding can say
+	// which ecosystem it belongs to and what the project's relationship to the
+	// package is, both of which were being read from the licence Result that
+	// does not have them.
+	inventory, ecosystemFor := indexInventory(rep.Results)
+
 	for _, res := range rep.Results {
 		rel := relativize(res.Target, t.Dir)
 
@@ -285,7 +298,7 @@ func (s *Scanner) ScanWithGraph(ctx context.Context, t scanner.Target) ([]findin
 					Name:      v.PkgName,
 					Version:   v.InstalledVersion,
 					PURL:      v.PkgIdentifier.PURL,
-					Direct:    byName[v.PkgName+"\x00"+v.InstalledVersion].Relationship == "direct",
+					Direct:    isDirect(byName[v.PkgName+"\x00"+v.InstalledVersion]),
 					DevOnly:   byName[v.PkgName+"\x00"+v.InstalledVersion].Dev,
 				},
 				Threat: finding.Threat{CVSS: cvss, CVSSVector: vector},
@@ -366,13 +379,76 @@ func (s *Scanner) ScanWithGraph(ctx context.Context, t scanner.Target) ([]findin
 				Message:        fmt.Sprintf("License category %s", l.Category),
 				Severity:       finding.NormalizeSeverity(l.Severity),
 				Location:       finding.Location{File: firstNonEmpty(relativize(l.FilePath, t.Dir), rel)},
-				Package:        &finding.Package{Name: l.PkgName, Ecosystem: res.Type},
-				References:     appendURL(nil, l.Link),
-				Metadata:       map[string]any{"license": l.Name, "license_category": l.Category},
+				// The inventory entry, not just a name. A licence finding is a
+				// decision about a dependency, and the facts that decide it --
+				// the version, whether the project asked for this itself, and
+				// whether it reaches a production artifact at all -- were being
+				// dropped on the floor here while vulnerability findings on the
+				// same package carried them.
+				Package:    licensePackage(ecosystemFor[res.Target], l.PkgName, inventory[res.Target]),
+				References: appendURL(nil, l.Link),
+				Metadata:   map[string]any{"license": l.Name, "license_category": l.Category},
 			})
 		}
 	}
 	return findings, graph, nil
+}
+
+// indexInventory maps each target's package inventory by name, and each
+// target to its ecosystem.
+//
+// Both exist because licences arrive in their own result -- Class "license",
+// Type empty, no Packages -- separate from the lang-pkgs result holding the
+// inventory for the same Target. Reading the ecosystem and the package facts
+// from the licence result gets an empty string and nothing, which is what a
+// licence finding used to carry.
+func indexInventory(results []result) (map[string]map[string]pkgEntry, map[string]string) {
+	inventory := map[string]map[string]pkgEntry{}
+	ecosystemFor := map[string]string{}
+	for _, res := range results {
+		if len(res.Packages) == 0 {
+			continue
+		}
+		if res.Type != "" {
+			ecosystemFor[res.Target] = res.Type
+		}
+		byPkgName := inventory[res.Target]
+		if byPkgName == nil {
+			byPkgName = map[string]pkgEntry{}
+			inventory[res.Target] = byPkgName
+		}
+		for _, p := range res.Packages {
+			// A direct dependency wins a name collision: where the same
+			// package appears twice, the one the project asked for itself is
+			// the one a reader is deciding about.
+			if prev, ok := byPkgName[p.Name]; !ok || (!isDirect(prev) && isDirect(p)) {
+				byPkgName[p.Name] = p
+			}
+		}
+	}
+	return inventory, ecosystemFor
+}
+
+// isDirect reports whether Trivy called this package a direct dependency.
+func isDirect(p pkgEntry) bool {
+	return strings.EqualFold(p.Relationship, "direct") || (p.Relationship == "" && !p.Indirect)
+}
+
+// licensePackage builds the package block for a licence finding from the scan's
+// own inventory, falling back to the bare name when the package is not in it.
+func licensePackage(ecosystem, name string, byPkgName map[string]pkgEntry) *finding.Package {
+	p, ok := byPkgName[name]
+	if !ok {
+		return &finding.Package{Ecosystem: ecosystem, Name: name}
+	}
+	return &finding.Package{
+		Ecosystem: ecosystem,
+		Name:      name,
+		Version:   p.Version,
+		PURL:      p.Identifier.PURL,
+		Direct:    isDirect(p),
+		DevOnly:   p.Dev,
+	}
 }
 
 // licenseWorthReporting filters out licences that carry no obligation worth
