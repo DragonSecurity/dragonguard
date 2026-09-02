@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -69,6 +70,10 @@ type Config struct {
 
 	// Baseline is the path to the baseline (circuit breaker) definition.
 	Baseline string `yaml:"baseline,omitempty" json:"baseline,omitempty"`
+
+	// Licenses records which dependency licences this project has decided
+	// about. See LicensePolicy.
+	Licenses LicensePolicy `yaml:"licenses,omitempty" json:"licenses,omitempty"`
 
 	// Ignore lists path globs excluded from all engines.
 	//
@@ -201,6 +206,68 @@ var (
 // Validate rejects a config that would silently misprice risk. An unknown
 // environment string is a typo, and a typo that quietly reads as "not
 // production" is exactly the failure this whole tool exists to prevent.
+// LicensePolicy is the project's standing decision about dependency licences.
+//
+// Licence obligations are not a property of the licence alone; they are a
+// property of how the dependency is used. MPL-2.0 is file-level copyleft, so
+// consuming a library unmodified triggers nothing while vendoring and patching
+// it does. A scanner cannot see the difference, and a bare list of approved
+// identifiers records the conclusion while losing the reasoning -- so when
+// somebody later forks that dependency, nothing reopens the question.
+//
+// Which is why a reason is required rather than optional. It is the only part
+// of the decision that survives the person who made it.
+type LicensePolicy struct {
+	// Allow suppresses findings for these licences: the obligation has been
+	// read and accepted, and the finding stops counting against the score.
+	Allow []LicenseDecision `yaml:"allow,omitempty" json:"allow,omitempty"`
+	// Deny fails the gate on these licences, whatever the scanner's own
+	// classification of them.
+	Deny []LicenseDecision `yaml:"deny,omitempty" json:"deny,omitempty"`
+}
+
+// LicenseDecision is one licence and the reasoning behind its verdict.
+type LicenseDecision struct {
+	// ID is the licence identifier as the scanner reports it, normally SPDX:
+	// MPL-2.0, AGPL-3.0, BlueOak-1.0.0.
+	ID string `yaml:"id" json:"id"`
+	// Reason is why this project decided what it decided. Required.
+	Reason string `yaml:"reason" json:"reason"`
+}
+
+// licenseIDPattern is deliberately narrow. These identifiers are interpolated
+// into a CEL string literal, so anything that could close the quote is
+// rejected at load rather than escaped later.
+var licenseIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._+-]*$`)
+
+func (p LicensePolicy) validate() error {
+	seen := map[string]string{}
+	for _, group := range []struct {
+		name  string
+		items []LicenseDecision
+	}{{"allow", p.Allow}, {"deny", p.Deny}} {
+		for i, d := range group.items {
+			id := strings.TrimSpace(d.ID)
+			if id == "" {
+				return fmt.Errorf("licenses.%s[%d] has no id", group.name, i)
+			}
+			if !licenseIDPattern.MatchString(id) {
+				return fmt.Errorf("licenses.%s[%d] id %q is not a licence identifier", group.name, i, d.ID)
+			}
+			if strings.TrimSpace(d.Reason) == "" {
+				// Refused rather than defaulted: an approval with no reason is
+				// the failure mode this field exists to prevent.
+				return fmt.Errorf("licenses.%s[%d] (%s) needs a reason", group.name, i, id)
+			}
+			if prev, ok := seen[strings.ToLower(id)]; ok {
+				return fmt.Errorf("licence %s is listed in both %s and %s", id, prev, group.name)
+			}
+			seen[strings.ToLower(id)] = group.name
+		}
+	}
+	return nil
+}
+
 func (c *Config) Validate() error {
 	env := strings.ToLower(c.Asset.Environment)
 	if env == "" {
@@ -219,7 +286,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("asset.criticality %q is not one of critical, high, medium, low", c.Asset.Criticality)
 	}
 	c.Asset.Criticality = crit
-	return nil
+
+	return c.Licenses.validate()
 }
 
 // Resolve turns a config-relative path into an absolute one.

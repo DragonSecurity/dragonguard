@@ -90,6 +90,13 @@ baseline: .dragon-baseline.yaml
 # compares against" below.
 # default_branch: main
 
+# Standing decisions about dependency licences. Every entry needs a reason.
+# See "Approving a licence" below.
+# licenses:
+#   allow:
+#     - id: MPL-2.0
+#       reason: consumed unmodified; MPL obligations attach to modified files
+
 # Path globs excluded from every engine. See "What ignore: actually
 # excludes" below for how a pattern is matched.
 ignore:
@@ -206,6 +213,63 @@ the next engine added.
 Anything excluded this way is counted in the scan output on an `ignore` line,
 for the same reason gitignored findings are: a filter you cannot see is
 indistinguishable from a scanner that missed something.
+
+## Approving a licence
+
+A scan reports dependency licences that carry an obligation — copyleft,
+reciprocal, forbidden, and anything it cannot classify. Permissive and
+attribution-only licences are dropped, because a gate that reports every MIT
+dependency teaches people that the licence dimension is noise.
+
+An obligation reported is not an obligation incurred. MPL-2.0 is the common
+case: it is *file-level* copyleft, so the obligation attaches to MPL-licensed
+files that are themselves modified. Consuming a library unmodified triggers
+nothing — but a scanner cannot see the difference between consuming and
+vendoring-then-patching, so it reports both.
+
+That decision belongs in the repository:
+
+```yaml
+licenses:
+  allow:
+    - id: MPL-2.0
+      reason: >-
+        Consumed unmodified. The obligation attaches to modified MPL files and
+        we vendor and patch none of them. Revisit if any is ever forked.
+  deny:
+    - id: AGPL-3.0
+      reason: We ship a hosted service; the network clause is not acceptable here.
+```
+
+An approved licence's findings stop counting against the `dependencies` score.
+A denied licence fails the gate whatever the scanner made of it.
+
+**The reason is required, not optional.** A bare list of approved identifiers
+records the conclusion and loses the reasoning, so when somebody later forks
+that dependency, nothing reopens the question. The reason is the only part of
+the decision that survives the person who made it, and it is shown as the
+rule's description in the policy evaluations.
+
+Identifiers are matched exactly as the scanner reports them — normally SPDX:
+`MPL-2.0`, `BlueOak-1.0.0`, `Apache-2.0 WITH LLVM-exception`.
+
+### The same thing in a policy rule
+
+`licenses:` is desugared into ordinary Dragon Policy rules, so there is one
+evaluation path and the approvals appear in the policy evaluations like
+anything else. Anything more conditional than a list is written directly:
+
+```yaml
+- id: reciprocal-is-fine-outside-production
+  when: finding.license_category == "reciprocal" && asset.environment != "production"
+  then:
+    decision: allow
+    exempt: true
+```
+
+`finding.license` and `finding.license_category` are empty strings for findings
+that are not about a licence, so a rule using them never errors — it simply
+does not match.
 
 ## What the regression gate compares against
 

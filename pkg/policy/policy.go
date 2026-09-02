@@ -433,6 +433,69 @@ func appendUnique(dst []string, vals ...string) []string {
 	return dst
 }
 
+// metaString reads a string out of a finding's metadata, or "" when absent.
+func metaString(f *finding.Finding, key string) string {
+	if f.Metadata == nil {
+		return ""
+	}
+	if v, ok := f.Metadata[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// LoadLicensePolicy compiles the project's licence decisions into ordinary
+// rules.
+//
+// Desugared rather than evaluated separately, so there is one evaluation path
+// and one place a decision can come from. A licence approval is a policy
+// exemption that happens to have a friendlier spelling, and it shows up in the
+// policy evaluations like any other rule -- Source() renders the CEL, so the
+// list stays auditable rather than becoming a second hidden mechanism.
+func (e *Engine) LoadLicensePolicy(lp config.LicensePolicy) error {
+	rules := make([]Rule, 0, len(lp.Allow)+len(lp.Deny))
+	build := func(d config.LicenseDecision, allow bool) Rule {
+		id := strings.TrimSpace(d.ID)
+		verdict, prefix := DecisionDeny, "license-deny/"
+		if allow {
+			verdict, prefix = DecisionAllow, "license-allow/"
+		}
+		return Rule{
+			ID:          prefix + id,
+			Description: d.Reason,
+			Match: Match{All: []string{
+				`finding.category == "LICENSE"`,
+				fmt.Sprintf("finding.license == %q", id),
+			}},
+			Then: Effect{
+				Decision: verdict,
+				// An approved licence stops counting: the obligation was read
+				// and accepted, and leaving it in the score would mean the
+				// only way to a clean dependencies dimension is to not use the
+				// dependency.
+				Exempt: allow,
+				Tags:   []string{"license"},
+			},
+		}
+	}
+	// Deny first: the strongest decision governs, and an operator reading the
+	// evaluations should see the refusal before the approvals.
+	for _, d := range lp.Deny {
+		rules = append(rules, build(d, false))
+	}
+	for _, d := range lp.Allow {
+		rules = append(rules, build(d, true))
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	raw, err := yaml.Marshal(rules)
+	if err != nil {
+		return fmt.Errorf("build licence policy: %w", err)
+	}
+	return e.LoadRules("licenses (.dragon.yaml)", raw)
+}
+
 // activationFor builds the CEL input for a finding.
 //
 // Every key is always present, including for absent data. A policy author
@@ -471,6 +534,12 @@ func activationFor(f *finding.Finding, asset config.Asset, scan map[string]any) 
 			"status":    string(f.Status),
 			"dimension": f.Category.Dimension(),
 			"tags":      toStrList(f.PolicyTags),
+			// Always present, empty for findings that are not about a licence.
+			// The name lived only in Metadata, which policy cannot see, so the
+			// only way to write a rule about MPL-2.0 was to match the rule_id
+			// string the Trivy adapter happens to build.
+			"license":          metaString(f, "license"),
+			"license_category": metaString(f, "license_category"),
 		},
 		"threat": map[string]any{
 			"cvss":              f.Threat.CVSS,
