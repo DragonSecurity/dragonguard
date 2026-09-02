@@ -75,3 +75,83 @@ func TestOnlyRealCVEIDsAreKept(t *testing.T) {
 		}
 	}
 }
+
+// Trivy emits licences in their own result: Class "license", no Packages, and
+// an empty Type. The licence findings were built from that result, so every one
+// of them carried an empty ecosystem, no version, and direct=false -- while a
+// vulnerability finding on the same package, from the lang-pkgs result beside
+// it, carried all three. That is the shape reproduced here.
+func TestLicenceFindingsTakeTheirFactsFromTheInventoryResult(t *testing.T) {
+	results := []result{
+		{
+			Target: "go.mod", Class: "lang-pkgs", Type: "gomod",
+			Packages: []pkgEntry{
+				{Name: "github.com/riverqueue/river", Version: "v0.46.0", Relationship: "direct"},
+				{Name: "github.com/go-sql-driver/mysql", Version: "v1.10.0", Relationship: "indirect", Indirect: true},
+			},
+		},
+		{
+			Target: "go.mod", Class: "license", Type: "",
+			Licenses: []license{{PkgName: "github.com/riverqueue/river", Name: "MPL-2.0", Category: "reciprocal"}},
+		},
+	}
+
+	inventory, ecosystemFor := indexInventory(results)
+
+	if got := ecosystemFor["go.mod"]; got != "gomod" {
+		t.Errorf("ecosystem for go.mod = %q, want gomod from the lang-pkgs result", got)
+	}
+	p := licensePackage(ecosystemFor["go.mod"], "github.com/riverqueue/river", inventory["go.mod"])
+	if p.Version != "v0.46.0" {
+		t.Errorf("version = %q, want the inventory's v0.46.0", p.Version)
+	}
+	if !p.Direct {
+		t.Error("a direct dependency's licence finding reports direct=false")
+	}
+	if p.Ecosystem != "gomod" {
+		t.Errorf("ecosystem = %q, want gomod", p.Ecosystem)
+	}
+}
+
+// A licence on something the inventory does not list -- the project's own
+// package.json declaring UNLICENSED, for instance -- still produces a usable
+// finding rather than nothing.
+func TestALicenceOnAnUnlistedPackageKeepsItsName(t *testing.T) {
+	p := licensePackage("yarn", "my-own-app", map[string]pkgEntry{})
+	if p == nil || p.Name != "my-own-app" || p.Ecosystem != "yarn" {
+		t.Errorf("lost the package: %+v", p)
+	}
+	if p.Version != "" || p.Direct {
+		t.Errorf("invented facts for a package not in the inventory: %+v", p)
+	}
+}
+
+// Where a name appears twice, the direct entry is the one a reader is deciding
+// about -- and the order Trivy happens to list them in must not decide it.
+func TestDirectWinsANameCollisionInEitherOrder(t *testing.T) {
+	direct := pkgEntry{Name: "dup", Version: "2.0.0", Relationship: "direct"}
+	indirect := pkgEntry{Name: "dup", Version: "1.0.0", Relationship: "indirect", Indirect: true}
+
+	for _, order := range [][]pkgEntry{{direct, indirect}, {indirect, direct}} {
+		inventory, _ := indexInventory([]result{{Target: "t", Type: "yarn", Packages: order}})
+		if got := inventory["t"]["dup"]; got.Version != "2.0.0" {
+			t.Errorf("picked %s; the direct entry should win regardless of order", got.Version)
+		}
+	}
+}
+
+// Trivy leaves Relationship empty for some ecosystems and uses Indirect
+// instead. The graph already read both; the vulnerability findings read only
+// Relationship, so the same package could be direct in the graph and indirect
+// on the finding.
+func TestDirectIsReadTheSameWayEverywhere(t *testing.T) {
+	if !isDirect(pkgEntry{Relationship: "direct"}) {
+		t.Error("an explicit direct relationship was not read as direct")
+	}
+	if !isDirect(pkgEntry{Relationship: "", Indirect: false}) {
+		t.Error("an empty relationship with Indirect false was not read as direct")
+	}
+	if isDirect(pkgEntry{Relationship: "", Indirect: true}) {
+		t.Error("an indirect package was read as direct")
+	}
+}
