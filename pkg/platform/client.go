@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/DragonSecurity/dragonguard/pkg/finding"
+	"github.com/DragonSecurity/dragonguard/pkg/scanner"
 )
 
 // Client talks to a DragonGuard platform API.
@@ -69,6 +70,12 @@ type IngestRequest struct {
 	Trigger  string `json:"trigger,omitempty"`
 
 	Findings []finding.Finding `json:"findings"`
+
+	// Components is the inventory the scan observed, findings or not. A clean
+	// dependency is still a dependency the platform needs to know about: it is
+	// what a future advisory gets matched against, and what "which projects
+	// use this package" is answered from.
+	Components []scanner.PackageNode `json:"components,omitempty"`
 
 	EnginesRun         []string `json:"engines_run,omitempty"`
 	EnginesUnavailable []string `json:"engines_unavailable,omitempty"`

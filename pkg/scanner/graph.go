@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"github.com/DragonSecurity/dragonguard/pkg/finding"
@@ -62,6 +63,32 @@ func (g *PackageGraph) Add(n PackageNode) {
 		}
 	}
 	g.Nodes[k] = n
+}
+
+// Sorted returns every node in a stable order.
+//
+// Stable because this travels: it is written into reports that get diffed and
+// posted to the platform, and a map's iteration order would make two scans of
+// an unchanged project look like a change.
+func (g *PackageGraph) Sorted() []PackageNode {
+	if g == nil || len(g.Nodes) == 0 {
+		return nil
+	}
+	out := make([]PackageNode, 0, len(g.Nodes))
+	for _, n := range g.Nodes {
+		out = append(out, n)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Ecosystem != b.Ecosystem {
+			return a.Ecosystem < b.Ecosystem
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return a.Version < b.Version
+	})
+	return out
 }
 
 // Merge folds another graph into this one.

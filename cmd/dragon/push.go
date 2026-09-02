@@ -103,6 +103,7 @@ command line ends up in shell history and in CI logs.`,
 				Commit:         orEmptyStr(commit, res.Scorecard.Commit),
 				Trigger:        orEmptyStr(trigger, "cli_ingest"),
 				Findings:       res.Findings,
+				Components:     res.Components,
 				RecordBaseline: record,
 			}
 			if prNumber > 0 {

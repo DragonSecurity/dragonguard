@@ -31,6 +31,16 @@ type Result struct {
 	// Surfaced rather than dropped silently: a filter nobody can see is
 	// indistinguishable from a scanner that missed something.
 	Ignored vcs.FilterReport `json:"ignored"`
+	// Components is every package the scan observed, not only the ones that
+	// carry a finding.
+	//
+	// A scan that finds nothing has still learned something: which components
+	// this project resolved, at which versions, and how they reach each other.
+	// Without it the only components anybody can see are the ones that already
+	// went wrong, so "which projects use this package" is unanswerable and a
+	// advisory published tomorrow has nothing to match against until somebody
+	// happens to scan again.
+	Components []scanner.PackageNode `json:"components,omitempty"`
 	// Excluded records findings removed by the `ignore:` list in the
 	// configuration, kept separate from Ignored because the two are different
 	// claims: git excludes a file from the repository, `ignore:` excludes a
