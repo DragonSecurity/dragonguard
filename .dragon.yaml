@@ -31,5 +31,10 @@ baseline: .dragon-baseline.yaml
 ignore:
   - bin
   - .git
+  # The regression corpus is deliberately broken code, including a credential
+  # fixture. Its findings are the subject of a test, not a report about this
+  # repository -- leaving it in would put twenty-four intentional findings in
+  # front of anyone reading real ones.
+  - testdata/corpus
 
 state_dir: .dragon

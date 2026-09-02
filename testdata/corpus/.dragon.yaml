@@ -1,0 +1,35 @@
+version: dragonguard/v1
+project: dragon-corpus
+
+# Deliberately production/critical: the corpus should exercise the whole risk
+# model, not the branch where everything is downgraded for being a test.
+asset:
+  name: dragon-corpus
+  environment: production
+  criticality: critical
+  internet_exposed: true
+  handles_pii: true
+
+engines:
+  trivy:
+    enabled: true
+  opengrep:
+    enabled: true
+    rules:
+      - ../../rules
+  gitleaks:
+    enabled: true
+  osv:
+    enabled: true
+  # No DAST: it would need a running target, and the corpus is files.
+  zap:
+    enabled: false
+  schemathesis:
+    enabled: false
+
+# The fixtures are the artifact here, so the gitignore filter that normally
+# excludes undisclosed files must not apply.
+scan_ignored_files: true
+
+ignore:
+  - .git
