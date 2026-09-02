@@ -85,7 +85,8 @@ policies:
 # The baseline is the gate. Without one, a scan reports and never blocks.
 baseline: .dragon-baseline.yaml
 
-# Path globs excluded from every engine.
+# Path globs excluded from every engine. See "What ignore: actually
+# excludes" below for how a pattern is matched.
 ignore:
   - node_modules
   - vendor
@@ -168,6 +169,38 @@ engines:
 
 An engine that is absent from `engines` entirely still runs. The map tunes
 engines; it is not an allowlist.
+
+## What `ignore:` actually excludes
+
+A pattern with **no `/`** matches any single path segment, at any depth. So
+`node_modules` covers `ui/node_modules/react/index.js`, which is what anyone
+writing it means.
+
+A pattern **containing `/`** is anchored at the scan root and matches that path
+exactly, or anything beneath it:
+
+```yaml
+ignore:
+  - internal/migrations/tenant            # the directory and everything in it
+  - internal/migrations/tenant/atlas.sum  # just the one file
+```
+
+Anchoring is deliberate. An unanchored `docs/build` would also match
+`ui/vendor/docs/build`, and a rule that quietly excludes more than it names is
+how a finding ends up hidden from someone who does not know it is hidden.
+
+`*` and `?` glob within a segment; `**` spans zero or more segments.
+
+The list is applied to the findings **every** engine returns, not only to the
+engines whose command line has a suitable exclude flag. Trivy, OpenGrep and OSV
+are each given the list as a flag because it saves them the work, but Gitleaks
+has no such flag and `--skip-dirs` cannot exclude a single file. Enforcing the
+list centrally is what makes it mean the same thing for every engine, and for
+the next engine added.
+
+Anything excluded this way is counted in the scan output on an `ignore` line,
+for the same reason gitignored findings are: a filter you cannot see is
+indistinguishable from a scanner that missed something.
 
 ## The baseline is a separate file
 

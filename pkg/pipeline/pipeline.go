@@ -27,6 +27,7 @@ import (
 	"github.com/DragonSecurity/dragonguard/pkg/config"
 	"github.com/DragonSecurity/dragonguard/pkg/enrich"
 	"github.com/DragonSecurity/dragonguard/pkg/finding"
+	"github.com/DragonSecurity/dragonguard/pkg/ignore"
 	"github.com/DragonSecurity/dragonguard/pkg/policy"
 	"github.com/DragonSecurity/dragonguard/pkg/remediate"
 	"github.com/DragonSecurity/dragonguard/pkg/report"
@@ -142,6 +143,18 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 	graph := scanner.NewPackageGraph()
 	for _, r := range engineResults {
 		graph.Merge(r.Graph)
+	}
+
+	// Apply the configured ignore list to every engine's output, not just the
+	// engines that happen to have an exclude flag. Trivy, OpenGrep and OSV are
+	// each handed the list; Gitleaks has no flag to hand it to, so a path in
+	// `ignore:` was scanned and reported regardless of the configuration
+	// saying otherwise. Enforcing it here is what makes the list mean the same
+	// thing for all of them, and for the next engine added.
+	cfgIgnore := ignore.New(cfg.Ignore)
+	findings, excludedReport := ignore.Filter(cfgIgnore, opts.Dir, findings)
+	if note := excludedReport.Note(); note != "" {
+		progress(note)
 	}
 
 	// Drop findings in files git deliberately excludes, before anything
@@ -276,6 +289,7 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 
 	return &report.Result{
 		Ignored:     ignoreReport,
+		Excluded:    excludedReport,
 		Scorecard:   sc,
 		Decision:    decision,
 		Findings:    findings,

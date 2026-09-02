@@ -64,6 +64,17 @@ type Config struct {
 	Baseline string `yaml:"baseline,omitempty" json:"baseline,omitempty"`
 
 	// Ignore lists path globs excluded from all engines.
+	//
+	// Enforced by pkg/ignore over the findings every engine returns, not only
+	// by the per-engine exclude flags. Those flags are an optimisation --
+	// Gitleaks has none at all, and --skip-dirs cannot exclude a single file
+	// -- so relying on them alone made the list mean something different for
+	// each engine.
+	//
+	// A pattern with no "/" matches any path segment at any depth; a pattern
+	// containing "/" is anchored at the scan root and covers that path and
+	// everything beneath it. "*" and "?" glob within a segment, "**" spans
+	// segments.
 	Ignore []string `yaml:"ignore,omitempty" json:"ignore,omitempty"`
 
 	// StateDir holds previous scorecards, which the regression gate needs.

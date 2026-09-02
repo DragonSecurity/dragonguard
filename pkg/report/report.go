@@ -11,6 +11,7 @@ import (
 	"github.com/DragonSecurity/dragonguard/pkg/baseline"
 	"github.com/DragonSecurity/dragonguard/pkg/enrich"
 	"github.com/DragonSecurity/dragonguard/pkg/finding"
+	"github.com/DragonSecurity/dragonguard/pkg/ignore"
 	"github.com/DragonSecurity/dragonguard/pkg/policy"
 	"github.com/DragonSecurity/dragonguard/pkg/scanner"
 	"github.com/DragonSecurity/dragonguard/pkg/scorecard"
@@ -30,6 +31,12 @@ type Result struct {
 	// Surfaced rather than dropped silently: a filter nobody can see is
 	// indistinguishable from a scanner that missed something.
 	Ignored vcs.FilterReport `json:"ignored"`
+	// Excluded records findings removed by the `ignore:` list in the
+	// configuration, kept separate from Ignored because the two are different
+	// claims: git excludes a file from the repository, `ignore:` excludes a
+	// path from the scan, and only the second one is a decision this project
+	// made about what it does not want to hear about.
+	Excluded ignore.Report `json:"excluded"`
 }
 
 // Options tune rendering.
@@ -165,6 +172,9 @@ func Text(w io.Writer, r *Result, opts Options) error {
 	fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "intelligence", p.c(dim, intel))
 	if note := r.Ignored.Note(); note != "" {
 		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "gitignore", p.c(dim, note))
+	}
+	if note := r.Excluded.Note(); note != "" {
+		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "ignore", p.c(dim, note))
 	}
 
 	// Verdict.
