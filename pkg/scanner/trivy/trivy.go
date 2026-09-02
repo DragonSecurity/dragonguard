@@ -252,7 +252,7 @@ func (s *Scanner) ScanWithGraph(ctx context.Context, t scanner.Target) ([]findin
 	// which ecosystem it belongs to and what the project's relationship to the
 	// package is, both of which were being read from the licence Result that
 	// does not have them.
-	inventory, ecosystemFor := indexInventory(rep.Results)
+	inventory, ecosystemFor, directnessFor := indexInventory(rep.Results)
 
 	for _, res := range rep.Results {
 		rel := relativize(res.Target, t.Dir)
@@ -263,13 +263,14 @@ func (s *Scanner) ScanWithGraph(ctx context.Context, t scanner.Target) ([]findin
 		for _, p := range res.Packages {
 			byName[p.Name+"\x00"+p.Version] = p
 			graph.Add(scanner.PackageNode{
-				Ecosystem: res.Type,
-				Name:      p.Name,
-				Version:   p.Version,
-				PURL:      p.Identifier.PURL,
-				Direct:    strings.EqualFold(p.Relationship, "direct") || (p.Relationship == "" && !p.Indirect),
-				DevOnly:   p.Dev,
-				DependsOn: p.DependsOn,
+				Ecosystem:  res.Type,
+				Name:       p.Name,
+				Version:    p.Version,
+				PURL:       p.Identifier.PURL,
+				Direct:     isDirect(p, directnessFor[res.Target]),
+				Directness: directnessFor[res.Target].String(),
+				DevOnly:    p.Dev,
+				DependsOn:  p.DependsOn,
 			})
 		}
 
@@ -298,7 +299,7 @@ func (s *Scanner) ScanWithGraph(ctx context.Context, t scanner.Target) ([]findin
 					Name:      v.PkgName,
 					Version:   v.InstalledVersion,
 					PURL:      v.PkgIdentifier.PURL,
-					Direct:    isDirect(byName[v.PkgName+"\x00"+v.InstalledVersion]),
+					Direct:    isDirect(byName[v.PkgName+"\x00"+v.InstalledVersion], directnessFor[res.Target]),
 					DevOnly:   byName[v.PkgName+"\x00"+v.InstalledVersion].Dev,
 				},
 				Threat: finding.Threat{CVSS: cvss, CVSSVector: vector},
@@ -385,7 +386,7 @@ func (s *Scanner) ScanWithGraph(ctx context.Context, t scanner.Target) ([]findin
 				// whether it reaches a production artifact at all -- were being
 				// dropped on the floor here while vulnerability findings on the
 				// same package carried them.
-				Package:    licensePackage(ecosystemFor[res.Target], l.PkgName, inventory[res.Target]),
+				Package:    licensePackage(ecosystemFor[res.Target], l.PkgName, inventory[res.Target], directnessFor[res.Target]),
 				References: appendURL(nil, l.Link),
 				Metadata:   map[string]any{"license": l.Name, "license_category": l.Category},
 			})
@@ -402,15 +403,19 @@ func (s *Scanner) ScanWithGraph(ctx context.Context, t scanner.Target) ([]findin
 // inventory for the same Target. Reading the ecosystem and the package facts
 // from the licence result gets an empty string and nothing, which is what a
 // licence finding used to carry.
-func indexInventory(results []result) (map[string]map[string]pkgEntry, map[string]string) {
+func indexInventory(results []result) (map[string]map[string]pkgEntry, map[string]string, map[string]directness) {
 	inventory := map[string]map[string]pkgEntry{}
 	ecosystemFor := map[string]string{}
+	directnessFor := map[string]directness{}
 	for _, res := range results {
 		if len(res.Packages) == 0 {
 			continue
 		}
 		if res.Type != "" {
 			ecosystemFor[res.Target] = res.Type
+		}
+		if d := directnessOf(res.Packages); d != directnessUnknown {
+			directnessFor[res.Target] = d
 		}
 		byPkgName := inventory[res.Target]
 		if byPkgName == nil {
@@ -421,22 +426,81 @@ func indexInventory(results []result) (map[string]map[string]pkgEntry, map[strin
 			// A direct dependency wins a name collision: where the same
 			// package appears twice, the one the project asked for itself is
 			// the one a reader is deciding about.
-			if prev, ok := byPkgName[p.Name]; !ok || (!isDirect(prev) && isDirect(p)) {
+			d := directnessFor[res.Target]
+			if prev, ok := byPkgName[p.Name]; !ok || (!isDirect(prev, d) && isDirect(p, d)) {
 				byPkgName[p.Name] = p
 			}
 		}
 	}
-	return inventory, ecosystemFor
+	return inventory, ecosystemFor, directnessFor
 }
 
-// isDirect reports whether Trivy called this package a direct dependency.
-func isDirect(p pkgEntry) bool {
-	return strings.EqualFold(p.Relationship, "direct") || (p.Relationship == "" && !p.Indirect)
+// directness records which field, if either, actually classifies a target's
+// packages.
+//
+// Trivy populates Relationship for some ecosystems, Indirect for others, and
+// neither for yarn: every package in a yarn.lock comes back with an empty
+// Relationship and Indirect false. Reading "empty and not indirect" as direct
+// therefore declared all 547 packages in one lockfile to be direct
+// dependencies, which Trivy never said and the manifest flatly contradicts --
+// that project names sixteen.
+//
+// So which field to trust is decided per target, from whether the target uses
+// it at all, and where neither does the answer is that we do not know.
+type directness int
+
+const (
+	directnessUnknown directness = iota
+	byRelationship
+	byIndirect
+)
+
+// String names the basis for a directness verdict, for consumers that need to
+// tell "classified as transitive" from "never classified".
+func (d directness) String() string {
+	switch d {
+	case byRelationship:
+		return "relationship"
+	case byIndirect:
+		return "indirect"
+	default:
+		return "unknown"
+	}
+}
+
+func directnessOf(pkgs []pkgEntry) directness {
+	for _, p := range pkgs {
+		if p.Relationship != "" {
+			return byRelationship
+		}
+	}
+	for _, p := range pkgs {
+		if p.Indirect {
+			return byIndirect
+		}
+	}
+	return directnessUnknown
+}
+
+// isDirect reports whether the project's own manifest names this package,
+// where the target's data supports an answer.
+func isDirect(p pkgEntry, d directness) bool {
+	switch d {
+	case byRelationship:
+		return strings.EqualFold(p.Relationship, "direct") || strings.EqualFold(p.Relationship, "root")
+	case byIndirect:
+		return !p.Indirect
+	default:
+		// Not "false because indirect" -- false because unestablished. A
+		// package the scanner cannot classify must not be reported as one the
+		// project asked for.
+		return false
+	}
 }
 
 // licensePackage builds the package block for a licence finding from the scan's
 // own inventory, falling back to the bare name when the package is not in it.
-func licensePackage(ecosystem, name string, byPkgName map[string]pkgEntry) *finding.Package {
+func licensePackage(ecosystem, name string, byPkgName map[string]pkgEntry, d directness) *finding.Package {
 	p, ok := byPkgName[name]
 	if !ok {
 		return &finding.Package{Ecosystem: ecosystem, Name: name}
@@ -446,7 +510,7 @@ func licensePackage(ecosystem, name string, byPkgName map[string]pkgEntry) *find
 		Name:      name,
 		Version:   p.Version,
 		PURL:      p.Identifier.PURL,
-		Direct:    isDirect(p),
+		Direct:    isDirect(p, d),
 		DevOnly:   p.Dev,
 	}
 }

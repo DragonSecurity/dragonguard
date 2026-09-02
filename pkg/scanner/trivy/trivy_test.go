@@ -96,12 +96,12 @@ func TestLicenceFindingsTakeTheirFactsFromTheInventoryResult(t *testing.T) {
 		},
 	}
 
-	inventory, ecosystemFor := indexInventory(results)
+	inventory, ecosystemFor, directnessFor := indexInventory(results)
 
 	if got := ecosystemFor["go.mod"]; got != "gomod" {
 		t.Errorf("ecosystem for go.mod = %q, want gomod from the lang-pkgs result", got)
 	}
-	p := licensePackage(ecosystemFor["go.mod"], "github.com/riverqueue/river", inventory["go.mod"])
+	p := licensePackage(ecosystemFor["go.mod"], "github.com/riverqueue/river", inventory["go.mod"], directnessFor["go.mod"])
 	if p.Version != "v0.46.0" {
 		t.Errorf("version = %q, want the inventory's v0.46.0", p.Version)
 	}
@@ -117,7 +117,7 @@ func TestLicenceFindingsTakeTheirFactsFromTheInventoryResult(t *testing.T) {
 // package.json declaring UNLICENSED, for instance -- still produces a usable
 // finding rather than nothing.
 func TestALicenceOnAnUnlistedPackageKeepsItsName(t *testing.T) {
-	p := licensePackage("yarn", "my-own-app", map[string]pkgEntry{})
+	p := licensePackage("yarn", "my-own-app", map[string]pkgEntry{}, directnessUnknown)
 	if p == nil || p.Name != "my-own-app" || p.Ecosystem != "yarn" {
 		t.Errorf("lost the package: %+v", p)
 	}
@@ -133,25 +133,59 @@ func TestDirectWinsANameCollisionInEitherOrder(t *testing.T) {
 	indirect := pkgEntry{Name: "dup", Version: "1.0.0", Relationship: "indirect", Indirect: true}
 
 	for _, order := range [][]pkgEntry{{direct, indirect}, {indirect, direct}} {
-		inventory, _ := indexInventory([]result{{Target: "t", Type: "yarn", Packages: order}})
+		inventory, _, _ := indexInventory([]result{{Target: "t", Type: "yarn", Packages: order}})
 		if got := inventory["t"]["dup"]; got.Version != "2.0.0" {
 			t.Errorf("picked %s; the direct entry should win regardless of order", got.Version)
 		}
 	}
 }
 
-// Trivy leaves Relationship empty for some ecosystems and uses Indirect
-// instead. The graph already read both; the vulnerability findings read only
-// Relationship, so the same package could be direct in the graph and indirect
-// on the finding.
-func TestDirectIsReadTheSameWayEverywhere(t *testing.T) {
-	if !isDirect(pkgEntry{Relationship: "direct"}) {
-		t.Error("an explicit direct relationship was not read as direct")
+// Which field classifies a package is a property of the target, not a constant.
+// Trivy populates Relationship for Go modules, Indirect for some ecosystems,
+// and neither for yarn -- every package in a yarn.lock arrives with an empty
+// Relationship and Indirect false. Reading that as direct declared all 547
+// packages in one lockfile to be direct dependencies of a project that names
+// sixteen.
+func TestDirectnessIsDecidedPerTarget(t *testing.T) {
+	gomod := []pkgEntry{
+		{Name: "a", Relationship: "root"},
+		{Name: "b", Relationship: "direct"},
+		{Name: "c", Relationship: "indirect", Indirect: true},
 	}
-	if !isDirect(pkgEntry{Relationship: "", Indirect: false}) {
-		t.Error("an empty relationship with Indirect false was not read as direct")
+	if got := directnessOf(gomod); got != byRelationship {
+		t.Errorf("directnessOf(gomod) = %v, want byRelationship", got)
 	}
-	if isDirect(pkgEntry{Relationship: "", Indirect: true}) {
-		t.Error("an indirect package was read as direct")
+	if !isDirect(gomod[1], byRelationship) || isDirect(gomod[2], byRelationship) {
+		t.Error("Relationship was not read correctly")
+	}
+	// root is the project itself, which is as direct as a dependency gets.
+	if !isDirect(gomod[0], byRelationship) {
+		t.Error("the root package was not read as direct")
+	}
+
+	olderEcosystem := []pkgEntry{{Name: "a"}, {Name: "b", Indirect: true}}
+	if got := directnessOf(olderEcosystem); got != byIndirect {
+		t.Errorf("directnessOf = %v, want byIndirect where only Indirect is populated", got)
+	}
+	if !isDirect(olderEcosystem[0], byIndirect) || isDirect(olderEcosystem[1], byIndirect) {
+		t.Error("Indirect was not read correctly")
+	}
+}
+
+// The case that matters: a target where Trivy classifies nothing must not have
+// every package declared direct. False here means unestablished, not indirect.
+func TestYarnClassifiesNothingSoNothingIsClaimed(t *testing.T) {
+	yarn := []pkgEntry{
+		{Name: "react", Version: "19.2.8"},
+		{Name: "lightningcss", Version: "1.32.0"},
+		{Name: "isexe", Version: "2.0.0"},
+	}
+	if got := directnessOf(yarn); got != directnessUnknown {
+		t.Fatalf("directnessOf(yarn) = %v, want directnessUnknown", got)
+	}
+	for _, p := range yarn {
+		if isDirect(p, directnessUnknown) {
+			t.Errorf("%s was reported direct on a target that classifies nothing", p.Name)
+		}
 	}
 }

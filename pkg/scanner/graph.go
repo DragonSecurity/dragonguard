@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"github.com/DragonSecurity/dragonguard/pkg/finding"
@@ -15,6 +16,15 @@ type PackageNode struct {
 	PURL      string `json:"purl,omitempty"`
 	// Direct reports that the project's own manifest names this package.
 	Direct bool `json:"direct"`
+	// Directness records how Direct was decided: "relationship", "indirect",
+	// or "unknown" when the scanner classified nothing for this target.
+	//
+	// Carried separately because false means two different things. A package
+	// the scanner examined and called transitive is not the same as one it
+	// never classified, and a consumer that cannot tell them apart will read
+	// the second as the first -- which is how every package in a yarn.lock
+	// came to be reported as a direct dependency.
+	Directness string `json:"directness,omitempty"`
 	// DevOnly reports a dependency that never reaches a production artifact.
 	DevOnly bool `json:"dev_only"`
 	// DependsOn holds the keys of this node's resolved dependencies.
@@ -62,6 +72,32 @@ func (g *PackageGraph) Add(n PackageNode) {
 		}
 	}
 	g.Nodes[k] = n
+}
+
+// Sorted returns every node in a stable order.
+//
+// Stable because this travels: it is written into reports that get diffed and
+// posted to the platform, and a map's iteration order would make two scans of
+// an unchanged project look like a change.
+func (g *PackageGraph) Sorted() []PackageNode {
+	if g == nil || len(g.Nodes) == 0 {
+		return nil
+	}
+	out := make([]PackageNode, 0, len(g.Nodes))
+	for _, n := range g.Nodes {
+		out = append(out, n)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Ecosystem != b.Ecosystem {
+			return a.Ecosystem < b.Ecosystem
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return a.Version < b.Version
+	})
+	return out
 }
 
 // Merge folds another graph into this one.
