@@ -177,3 +177,65 @@ func TestVerdictExitCodes(t *testing.T) {
 }
 
 var _ = finding.Finding{}
+
+// A configured regression rule that produces no output when there is nothing
+// to compare against is indistinguishable, in the report, from one that ran
+// and passed. That is the failure this reports around: the author believes the
+// constraint is enforced, and it has never once been evaluated.
+func TestRegressionRulesAreReportedWhenTheyCannotBeEvaluated(t *testing.T) {
+	three := 3.0
+	five := 5.0
+	b := &Baseline{
+		MaximumScoreRegression: &five,
+		Dimensions: map[string]DimensionRule{
+			"dependencies": {MaximumRegression: &three},
+		},
+	}
+	sc := &scorecard.Scorecard{
+		Score:      38,
+		Dimensions: map[string]scorecard.Dimension{"dependencies": {Score: 93, Assessed: true}},
+	}
+
+	d := b.Evaluate(sc, nil, nil)
+
+	var found []Check
+	for _, c := range d.Checks {
+		if c.Gate == "regression" {
+			found = append(found, c)
+		}
+	}
+	if len(found) != 2 {
+		t.Fatalf("got %d regression checks, want both the overall and the dimension rule: %+v", len(found), found)
+	}
+	for _, c := range found {
+		if !c.NotEvaluated {
+			t.Errorf("%s is not marked not-evaluated; it reads as a pass", c.Name)
+		}
+		if !c.Passed {
+			t.Errorf("%s blocks; a first scan cannot regress and must not fail the gate", c.Name)
+		}
+	}
+}
+
+// The ordinary path still blocks: a real drop past the allowance fails.
+func TestDimensionRegressionStillBlocksOnARealDrop(t *testing.T) {
+	three := 3.0
+	b := &Baseline{Dimensions: map[string]DimensionRule{"dependencies": {MaximumRegression: &three}}}
+	prev := &scorecard.Scorecard{Dimensions: map[string]scorecard.Dimension{"dependencies": {Score: 98, Assessed: true}}}
+	sc := &scorecard.Scorecard{Dimensions: map[string]scorecard.Dimension{"dependencies": {Score: 93, Assessed: true}}}
+
+	d := b.Evaluate(sc, prev, nil)
+
+	for _, c := range d.Checks {
+		if c.Name == "dependencies regression" {
+			if c.Passed {
+				t.Error("a 5 point drop passed a 3 point allowance")
+			}
+			if c.NotEvaluated {
+				t.Error("a check with both scores present was reported as not evaluated")
+			}
+			return
+		}
+	}
+	t.Error("no dependencies regression check was emitted")
+}

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -231,4 +232,39 @@ func TestFailingEngineDoesNotLoseOtherEvidence(t *testing.T) {
 	if res.Scorecard.Mandatory["no_active_secrets"] {
 		t.Error("the secret should still have been counted")
 	}
+}
+
+// The gate needs to know which branch is the trunk before it can compare
+// against it. Configuration wins, then the remote's own HEAD, then a local
+// main or master -- and nothing at all outside a repository, because
+// inventing a name would compare this scan against another project's snapshot.
+func TestDefaultBranchResolution(t *testing.T) {
+	t.Run("configuration wins", func(t *testing.T) {
+		if got := defaultBranch(t.TempDir(), "trunk"); got != "trunk" {
+			t.Errorf("defaultBranch = %q, want the configured trunk", got)
+		}
+	})
+
+	t.Run("not a repository", func(t *testing.T) {
+		if got := defaultBranch(t.TempDir(), ""); got != "" {
+			t.Errorf("defaultBranch = %q outside a repository, want empty", got)
+		}
+	})
+
+	t.Run("local main", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, args := range [][]string{
+			{"init", "--initial-branch=main"},
+			{"-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "--allow-empty", "-m", "x"},
+		} {
+			cmd := exec.Command("git", args...)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Skipf("git unavailable: %v: %s", err, out)
+			}
+		}
+		if got := defaultBranch(dir, ""); got != "main" {
+			t.Errorf("defaultBranch = %q, want main", got)
+		}
+	})
 }

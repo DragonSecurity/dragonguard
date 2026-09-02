@@ -120,6 +120,12 @@ type Check struct {
 	Actual   string  `json:"actual"`
 	Verdict  Verdict `json:"verdict"`
 	Detail   string  `json:"detail,omitempty"`
+	// NotEvaluated marks a constraint that could not be assessed rather than
+	// one that was assessed and held. It does not block -- there is nothing to
+	// block on -- but it must not read as a green tick either: a gate that
+	// silently cannot run looks exactly like a gate that is passing, and the
+	// difference is the whole value of the gate.
+	NotEvaluated bool `json:"not_evaluated,omitempty"`
 }
 
 // Decision is the circuit breaker's full result.
@@ -348,13 +354,7 @@ func (b *Baseline) scoreGates(d *Decision, sc *scorecard.Scorecard) {
 		})
 	}
 
-	names := make([]string, 0, len(b.Dimensions))
-	for n := range b.Dimensions {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
+	for _, name := range b.dimensionNames() {
 		rule := b.Dimensions[name]
 		if rule.Minimum == nil {
 			continue
@@ -377,13 +377,31 @@ func (b *Baseline) scoreGates(d *Decision, sc *scorecard.Scorecard) {
 // regressionGates enforce that posture has not decayed.
 func (b *Baseline) regressionGates(d *Decision, sc *scorecard.Scorecard, prev *scorecard.Scorecard) {
 	if prev == nil {
+		// Every configured regression rule is reported, not just the overall
+		// one. A dimension rule that vanishes when there is no baseline is a
+		// constraint the author believes is enforced and which produces no
+		// output at all -- indistinguishable from one that is passing.
 		if b.MaximumScoreRegression != nil {
 			d.Checks = append(d.Checks, Check{
 				Gate: "regression", Name: "overall regression", Passed: true,
-				Required: fmt.Sprintf("<= %.0f point drop", *b.MaximumScoreRegression),
-				Actual:   "no baseline recorded",
-				Verdict:  VerdictWarn,
-				Detail:   "no previous scan to compare against",
+				Required:     fmt.Sprintf("<= %.0f point drop", *b.MaximumScoreRegression),
+				Actual:       "not evaluated: no baseline recorded",
+				Verdict:      VerdictWarn,
+				Detail:       "no baseline for the default branch to compare against",
+				NotEvaluated: true,
+			})
+		}
+		for _, name := range b.dimensionNames() {
+			if b.Dimensions[name].MaximumRegression == nil {
+				continue
+			}
+			d.Checks = append(d.Checks, Check{
+				Gate: "regression", Name: name + " regression", Passed: true,
+				Required:     fmt.Sprintf("<= %.0f point drop", *b.Dimensions[name].MaximumRegression),
+				Actual:       "not evaluated: no baseline recorded",
+				Verdict:      VerdictWarn,
+				Detail:       "no baseline for the default branch to compare against",
+				NotEvaluated: true,
 			})
 		}
 		return
@@ -435,6 +453,16 @@ func (b *Baseline) regressionGates(d *Decision, sc *scorecard.Scorecard, prev *s
 				name, before.Score, cur.Score, *rule.MaximumRegression),
 		})
 	}
+}
+
+// dimensionNames returns the configured dimensions in a stable order.
+func (b *Baseline) dimensionNames() []string {
+	names := make([]string, 0, len(b.Dimensions))
+	for n := range b.Dimensions {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (b *Baseline) policyGates(d *Decision, sc *scorecard.Scorecard) {

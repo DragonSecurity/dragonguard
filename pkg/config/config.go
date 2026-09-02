@@ -60,6 +60,13 @@ type Config struct {
 	// against the config file's directory.
 	Policies []string `yaml:"policies,omitempty" json:"policies,omitempty"`
 
+	// DefaultBranch names the branch the regression gate compares against.
+	//
+	// Empty means detect it: origin/HEAD, then a local main or master. Set it
+	// when neither is right -- a repository whose trunk is called something
+	// else, or a CI checkout with no remote HEAD ref to read.
+	DefaultBranch string `yaml:"default_branch,omitempty" json:"default_branch,omitempty"`
+
 	// Baseline is the path to the baseline (circuit breaker) definition.
 	Baseline string `yaml:"baseline,omitempty" json:"baseline,omitempty"`
 

@@ -67,21 +67,31 @@ func baselineName(branch string) string {
 	return fmt.Sprintf("baseline-%s-%s.json", safe, hex.EncodeToString(sum[:])[:8])
 }
 
-// Load reads the snapshot for a branch, falling back to the default snapshot
-// so a new branch inherits main's baseline rather than starting from nothing.
+// Load reads the snapshot the gate compares against: the given branch's.
+//
+// Callers pass the *default* branch, not the branch being scanned. The
+// question a gate is asked on a pull request is "does merging this make main
+// worse", and only main's baseline can answer it. Comparing a branch to its
+// own last scan answers a different question -- "is this worse than it was an
+// hour ago" -- which a branch that was already below main passes trivially.
+//
+// The previous implementation tried the branch's own snapshot and then a file
+// called baseline.json. Nothing ever wrote baseline.json: Save names snapshots
+// after the branch, and only a scan outside a git repository has an empty
+// branch name to produce that file. So the fallback that was documented as
+// letting "a new branch inherit main's baseline" could not fire, and every
+// feature branch reported "no baseline recorded" and passed the regression
+// gate without evaluating it.
 func (s *Store) Load(branch string) (*Snapshot, error) {
-	for _, name := range []string{baselineName(branch), "baseline.json"} {
-		data, err := os.ReadFile(s.path(name))
-		if err != nil {
-			continue
-		}
-		var snap Snapshot
-		if err := json.Unmarshal(data, &snap); err != nil {
-			return nil, fmt.Errorf("parse snapshot %s: %w", name, err)
-		}
-		return &snap, nil
+	data, err := os.ReadFile(s.path(baselineName(branch)))
+	if err != nil {
+		return nil, nil
 	}
-	return nil, nil
+	var snap Snapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return nil, fmt.Errorf("parse snapshot %s: %w", baselineName(branch), err)
+	}
+	return &snap, nil
 }
 
 // Save writes a snapshot for a branch.

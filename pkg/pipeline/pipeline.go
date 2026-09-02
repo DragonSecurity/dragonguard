@@ -174,8 +174,13 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 
 	// --- diff against the recorded baseline ---
 	branch, commit := gitInfo(opts.Dir)
+	// The gate compares against the default branch, not the branch in hand.
+	// "Does merging this make main worse" is the question; a branch measured
+	// against its own last scan answers "is this worse than it was an hour
+	// ago", which a branch that is already below main passes trivially.
+	base := defaultBranch(opts.Dir, cfg.DefaultBranch)
 	store := state.New(cfg.StatePath())
-	prev, err := store.Load(branch)
+	prev, err := store.Load(base)
 	if err != nil {
 		// A corrupt snapshot must not silently become "no baseline", which
 		// would make every finding look new and every regression invisible.
@@ -284,7 +289,14 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 		if err := store.Save(branch, sc, findings); err != nil {
 			return nil, fmt.Errorf("record baseline: %w", err)
 		}
-		progress("recorded baseline snapshot")
+		if base != "" && branch != base {
+			// Said out loud because it is the obvious mistake: recording on a
+			// feature branch looks like it has set the bar, and the gate will
+			// go on comparing against the default branch regardless.
+			progress(fmt.Sprintf("recorded snapshot for %s; the gate compares against %s, so this does not change it", branch, base))
+		} else {
+			progress("recorded baseline snapshot")
+		}
 	}
 
 	return &report.Result{
@@ -372,6 +384,39 @@ func resolvePolicyPaths(cfg *config.Config) []string {
 }
 
 // gitInfo reads the branch and commit, tolerating a non-repository.
+// defaultBranch resolves the branch the gate measures against.
+//
+// Configuration wins, then the remote's own idea of its trunk, then a local
+// main or master. Empty when none of those exist -- a directory that is not a
+// repository has no default branch, and inventing one would silently compare a
+// scan against a snapshot belonging to something else.
+func defaultBranch(dir, configured string) string {
+	if configured != "" {
+		return configured
+	}
+	run := func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return ""
+	}
+	if ref := run("symbolic-ref", "--short", "refs/remotes/origin/HEAD"); ref != "" {
+		return strings.TrimPrefix(ref, "origin/")
+	}
+	for _, candidate := range []string{"main", "master"} {
+		if run("rev-parse", "--verify", "--quiet", "refs/heads/"+candidate) != "" {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func gitInfo(dir string) (branch, commit string) {
 	run := func(args ...string) string {
 		cmd := exec.Command("git", args...)

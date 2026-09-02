@@ -142,7 +142,9 @@ func Text(w io.Writer, r *Result, opts Options) error {
 		}
 		for _, c := range r.Decision.Checks {
 			mark := p.c(green, "OK")
-			if !c.Passed {
+			if c.NotEvaluated {
+				mark = p.c(dim, "--")
+			} else if !c.Passed {
 				if c.Verdict == baseline.VerdictWarn {
 					mark = p.c(yellow, "!!")
 				} else {
