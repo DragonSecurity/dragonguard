@@ -225,7 +225,14 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 		if err := policyEngine.LoadPaths(policyPaths); err != nil {
 			return nil, err
 		}
-		progress(fmt.Sprintf("loaded %d policy rules", len(policyEngine.Rules())))
+	}
+	// After the packs, so a hand-written rule can still be the last word on a
+	// licence the project has an opinion about.
+	if err := policyEngine.LoadLicensePolicy(cfg.Licenses); err != nil {
+		return nil, err
+	}
+	if n := len(policyEngine.Rules()); n > 0 {
+		progress(fmt.Sprintf("loaded %d policy rules", n))
 	}
 	scanCtx := map[string]any{
 		"project":        cfg.Project,

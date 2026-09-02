@@ -192,3 +192,51 @@ func TestDocumentedEnabledShorthandBehavesAsDocumented(t *testing.T) {
 		t.Error("enabled: false should turn an engine off")
 	}
 }
+
+// A licence approval with no reason is the failure this field exists to
+// prevent: it records the conclusion and loses the reasoning, so when somebody
+// later vendors and patches that dependency, nothing reopens the question.
+func TestLicenceApprovalNeedsAReason(t *testing.T) {
+	c := &Config{Licenses: LicensePolicy{Allow: []LicenseDecision{{ID: "MPL-2.0"}}}}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("an approval with no reason was accepted")
+	}
+	if !strings.Contains(err.Error(), "reason") {
+		t.Errorf("error does not say what is missing: %v", err)
+	}
+}
+
+// The identifier is interpolated into a CEL string literal, so anything that
+// could close the quote is refused at load rather than escaped later.
+func TestLicenceIDIsNotAnExpression(t *testing.T) {
+	for _, id := range []string{`MPL-2.0" || true || "`, "MPL\n2.0", `a\"b`, ""} {
+		c := &Config{Licenses: LicensePolicy{Allow: []LicenseDecision{{ID: id, Reason: "x"}}}}
+		if err := c.Validate(); err == nil {
+			t.Errorf("accepted %q as a licence identifier", id)
+		}
+	}
+}
+
+// SPDX identifiers, including the ones with spaces and plus signs.
+func TestRealLicenceIdentifiersAreAccepted(t *testing.T) {
+	for _, id := range []string{"MPL-2.0", "BlueOak-1.0.0", "Apache-2.0 WITH LLVM-exception", "GPL-2.0+", "0BSD"} {
+		c := &Config{Licenses: LicensePolicy{Allow: []LicenseDecision{{ID: id, Reason: "reviewed"}}}}
+		if err := c.Validate(); err != nil {
+			t.Errorf("rejected %q: %v", id, err)
+		}
+	}
+}
+
+// Listing a licence as both approved and refused is a contradiction, and
+// resolving it silently would mean the gate's behaviour depends on which list
+// happened to be evaluated first.
+func TestALicenceCannotBeBothAllowedAndDenied(t *testing.T) {
+	c := &Config{Licenses: LicensePolicy{
+		Allow: []LicenseDecision{{ID: "MPL-2.0", Reason: "consumed unmodified"}},
+		Deny:  []LicenseDecision{{ID: "mpl-2.0", Reason: "no copyleft"}},
+	}}
+	if err := c.Validate(); err == nil {
+		t.Error("a licence listed in both allow and deny was accepted")
+	}
+}

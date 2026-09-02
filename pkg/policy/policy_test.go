@@ -281,3 +281,97 @@ func TestLoadRulesRejectsDuplicateIDsAcrossPacks(t *testing.T) {
 		t.Error("a rule id duplicated across packs must be rejected: the second would silently never be attributable")
 	}
 }
+
+func licenceFinding(pkg, licence string) finding.Finding {
+	return finding.Finding{
+		Category: finding.CategoryLicense,
+		RuleID:   "license/" + licence,
+		Title:    pkg + " licensed under " + licence,
+		Severity: finding.SeverityMedium,
+		Package:  &finding.Package{Name: pkg, Ecosystem: "gomod"},
+		Metadata: map[string]any{"license": licence, "license_category": "reciprocal"},
+	}
+}
+
+// The case this exists for. MPL-2.0 is file-level copyleft: consuming a
+// library unmodified triggers nothing, and eleven findings at risk 50 were
+// dragging the dependencies dimension down for an obligation nobody had
+// incurred. Approving it must stop it counting, not merely annotate it.
+func TestAnApprovedLicenceStopsCounting(t *testing.T) {
+	e, err := NewEngine()
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	if err := e.LoadLicensePolicy(config.LicensePolicy{
+		Allow: []config.LicenseDecision{{
+			ID:     "MPL-2.0",
+			Reason: "consumed unmodified; MPL obligations attach to modified MPL files",
+		}},
+	}); err != nil {
+		t.Fatalf("LoadLicensePolicy: %v", err)
+	}
+
+	findings := []finding.Finding{
+		licenceFinding("github.com/riverqueue/river", "MPL-2.0"),
+		licenceFinding("some/other", "AGPL-3.0"),
+	}
+	e.EvaluateAll(findings, config.Asset{}, nil)
+
+	if findings[0].Status != finding.StatusAccepted {
+		t.Errorf("approved licence has status %q, want accepted so the scorecard skips it", findings[0].Status)
+	}
+	if findings[1].Status == finding.StatusAccepted {
+		t.Error("a licence nobody approved was exempted too")
+	}
+}
+
+// Denial has to work whatever the scanner thought of the licence, which is the
+// point of having a project-level opinion at all.
+func TestADeniedLicenceIsRefused(t *testing.T) {
+	e, err := NewEngine()
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	if err := e.LoadLicensePolicy(config.LicensePolicy{
+		Deny: []config.LicenseDecision{{ID: "AGPL-3.0", Reason: "we ship a hosted service"}},
+	}); err != nil {
+		t.Fatalf("LoadLicensePolicy: %v", err)
+	}
+
+	f := licenceFinding("some/thing", "AGPL-3.0")
+	ev := e.Evaluate(&f, config.Asset{}, nil)
+	if ev.Decision != DecisionDeny {
+		t.Errorf("decision = %q, want deny", ev.Decision)
+	}
+}
+
+// The licence name lived only in Metadata, which policy could not see, so the
+// only way to write a rule about it was to match the rule_id string the Trivy
+// adapter happens to build. Exposing it is what makes a hand-written rule
+// readable, and the desugared ones are compiled from the same field.
+func TestLicenceIsVisibleToHandWrittenRules(t *testing.T) {
+	e, err := NewEngine()
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	if err := e.LoadRules("t", []byte(`
+- id: mpl-is-fine
+  when: finding.license == "MPL-2.0" && finding.license_category == "reciprocal"
+  then:
+    decision: allow
+    exempt: true
+`)); err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	f := licenceFinding("github.com/riverqueue/river", "MPL-2.0")
+	if ev := e.Evaluate(&f, config.Asset{}, nil); !ev.Exempt {
+		t.Errorf("a rule written against finding.license did not match: %+v", ev)
+	}
+
+	// A finding with no licence metadata must read as empty, not error.
+	other := finding.Finding{Category: finding.CategorySCA, RuleID: "CVE-2026-1"}
+	if ev := e.Evaluate(&other, config.Asset{}, nil); ev.Exempt {
+		t.Error("a non-licence finding matched a licence rule")
+	}
+}
