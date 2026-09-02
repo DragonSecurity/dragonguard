@@ -1,0 +1,64 @@
+# What the engines must still find.
+#
+# The check this drives is deliberately asymmetric:
+#
+#   a detection that DISAPPEARED fails the build -- that is a regression
+#   detections that are NEW are reported, not failed -- that is an engine
+#   improving, and a human decides whether to record it
+#
+# Symmetry would be wrong here. Losing a detection weakens every downstream
+# gate silently; gaining one is good news that should not block a bump.
+
+# Exact detections, keyed on what identifies them rather than on a fingerprint.
+# A fingerprint moves when a fixture line moves, which would make this file
+# fail for edits that changed nothing about detection.
+detections:
+  # --- SAST: the in-house rules in rules/. Listed individually because a rule
+  # that stops matching is exactly as serious as an engine that stops looking,
+  # and far easier to cause by accident.
+  - {scanner: opengrep, rule: go.dragon-go-sql-string-concat,             file: go/sql_and_command.go}
+  - {scanner: opengrep, rule: go.dragon-go-command-injection,             file: go/sql_and_command.go}
+  - {scanner: opengrep, rule: go.dragon-go-ignored-error-on-verification, file: go/sql_and_command.go}
+  - {scanner: opengrep, rule: go.dragon-go-tls-verification-disabled,     file: go/sql_and_command.go}
+  - {scanner: opengrep, rule: python.dragon-py-sql-string-format,         file: python/injection.py}
+  - {scanner: opengrep, rule: python.dragon-py-shell-true,                file: python/injection.py}
+  - {scanner: opengrep, rule: python.dragon-py-yaml-unsafe-load,          file: python/injection.py}
+  - {scanner: opengrep, rule: javascript.dragon-js-sql-string-concat,     file: javascript/injection.js}
+  - {scanner: opengrep, rule: javascript.dragon-js-command-injection,     file: javascript/injection.js}
+  - {scanner: opengrep, rule: javascript.dragon-js-eval-on-variable,      file: javascript/injection.js}
+  - {scanner: opengrep, rule: javascript.dragon-js-weak-hash-for-passwords, file: javascript/injection.js}
+  - {scanner: opengrep, rule: javascript.dragon-js-insecure-random-for-secrets, file: javascript/injection.js}
+
+  # --- IaC: trivy's Dockerfile checks. DS-0002 root user, DS-0025 apk upgrade,
+  # DS-0026 missing healthcheck.
+  - {scanner: trivy, rule: DS-0002, file: iac/Dockerfile}
+  - {scanner: trivy, rule: DS-0025, file: iac/Dockerfile}
+  - {scanner: trivy, rule: DS-0026, file: iac/Dockerfile}
+
+  # --- Secrets. Two engines, and they do not agree: gitleaks does not flag a
+  # bare access key ID, correctly -- an ID identifies, it does not authenticate.
+  # Trivy flags both halves. Asserting each separately is what would catch
+  # either engine quietly narrowing.
+  - {scanner: gitleaks, rule: generic-api-key,       file: secrets/config.env}
+  - {scanner: trivy,    rule: aws-access-key-id,     file: secrets/config.env}
+  - {scanner: trivy,    rule: aws-secret-access-key, file: secrets/config.env}
+
+# SCA is asserted by PACKAGE, never by CVE.
+#
+# The vulnerability database changes independently of the engine version --
+# advisories are published daily and withdrawn occasionally -- so a pinned CVE
+# list would fail constantly for reasons that are not regressions, and the
+# check would be switched off within a week. What must not change is that the
+# scanner still recognises these pinned vulnerable versions at all.
+packages:
+  - {ecosystem: npm, name: lodash,   version: 4.17.20}
+  - {ecosystem: npm, name: minimist, version: 1.2.5}
+
+# Floors per category. A category dropping to zero means an engine stopped
+# running rather than stopped matching, which the per-detection list above
+# would report as a dozen separate failures without naming the actual cause.
+minimum_by_category:
+  SAST: 12
+  IAC: 3
+  SECRET: 3
+  SCA: 2

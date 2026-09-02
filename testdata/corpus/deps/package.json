@@ -1,0 +1,10 @@
+{
+  "name": "dragon-corpus-deps",
+  "version": "0.0.0",
+  "private": true,
+  "//": "Pinned to versions with published advisories. Never installed; the lockfile is the evidence.",
+  "dependencies": {
+    "lodash": "4.17.20",
+    "minimist": "1.2.5"
+  }
+}

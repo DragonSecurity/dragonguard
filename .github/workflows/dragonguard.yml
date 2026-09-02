@@ -87,6 +87,17 @@ jobs:
           opengrep scan --config rules --validate
           bin/dragon policy test policies
 
+      # The one check that can tell whether an engine quietly stopped finding
+      # something. -count=1 is load-bearing: Go's test cache cannot see the
+      # engine binaries, so a cached pass would report success for exactly the
+      # version bump this exists to examine. DRAGON_CORPUS=require turns a
+      # missing engine into a failure rather than a skip, because a corpus
+      # check that silently does not run is the same as not having one.
+      - name: Engine regression corpus
+        env:
+          DRAGON_CORPUS: require
+        run: go test -count=1 -v ./pkg/pipeline/ -run TestCorpus
+
       - name: Restore baseline and threat-intelligence state
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
