@@ -16,6 +16,15 @@ type PackageNode struct {
 	PURL      string `json:"purl,omitempty"`
 	// Direct reports that the project's own manifest names this package.
 	Direct bool `json:"direct"`
+	// Directness records how Direct was decided: "relationship", "indirect",
+	// or "unknown" when the scanner classified nothing for this target.
+	//
+	// Carried separately because false means two different things. A package
+	// the scanner examined and called transitive is not the same as one it
+	// never classified, and a consumer that cannot tell them apart will read
+	// the second as the first -- which is how every package in a yarn.lock
+	// came to be reported as a direct dependency.
+	Directness string `json:"directness,omitempty"`
 	// DevOnly reports a dependency that never reaches a production artifact.
 	DevOnly bool `json:"dev_only"`
 	// DependsOn holds the keys of this node's resolved dependencies.

@@ -263,13 +263,14 @@ func (s *Scanner) ScanWithGraph(ctx context.Context, t scanner.Target) ([]findin
 		for _, p := range res.Packages {
 			byName[p.Name+"\x00"+p.Version] = p
 			graph.Add(scanner.PackageNode{
-				Ecosystem: res.Type,
-				Name:      p.Name,
-				Version:   p.Version,
-				PURL:      p.Identifier.PURL,
-				Direct:    isDirect(p, directnessFor[res.Target]),
-				DevOnly:   p.Dev,
-				DependsOn: p.DependsOn,
+				Ecosystem:  res.Type,
+				Name:       p.Name,
+				Version:    p.Version,
+				PURL:       p.Identifier.PURL,
+				Direct:     isDirect(p, directnessFor[res.Target]),
+				Directness: directnessFor[res.Target].String(),
+				DevOnly:    p.Dev,
+				DependsOn:  p.DependsOn,
 			})
 		}
 
@@ -453,6 +454,19 @@ const (
 	byRelationship
 	byIndirect
 )
+
+// String names the basis for a directness verdict, for consumers that need to
+// tell "classified as transitive" from "never classified".
+func (d directness) String() string {
+	switch d {
+	case byRelationship:
+		return "relationship"
+	case byIndirect:
+		return "indirect"
+	default:
+		return "unknown"
+	}
+}
 
 func directnessOf(pkgs []pkgEntry) directness {
 	for _, p := range pkgs {
