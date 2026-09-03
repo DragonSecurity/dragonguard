@@ -59,14 +59,40 @@ func (s *Scanner) RulesFor(t scanner.Target) []string {
 	// unexplained is in /var/folders. Name it for what it is, and say that
 	// nothing was configured -- which is the fact worth knowing when a hand
 	// run of the engine disagrees with the scan.
+	// The label depends on how the pack was chosen. Saying "not set" when a
+	// project asked for it by name would be false, and the whole point of this
+	// line is that it can be trusted.
+	label := "built-in pack"
+	if !s.configured(t) {
+		label += " (engines.opengrep.rules not set)"
+	}
 	if embedded, err := dragonrules.Dir(); err == nil && embedded != "" {
 		for i, r := range rules {
 			if r == embedded {
-				rules[i] = "built-in pack (engines.opengrep.rules not set)"
+				rules[i] = label
 			}
 		}
 	}
 	return rules
+}
+
+// BuiltinRules is the name a project uses to include the pack embedded in the
+// binary alongside its own.
+//
+// It needs a name because it has no path: the pack is extracted to a temporary
+// directory at scan time, so there is nothing stable to write in a config
+// file. Without it, engines.opengrep.rules could only ever replace the
+// built-in rules, and "the defaults plus p/security-audit" was not expressible
+// at all.
+const BuiltinRules = "builtin"
+
+// configured reports whether the project named its own rules.
+func (s *Scanner) configured(t scanner.Target) bool {
+	if t.Config == nil {
+		return false
+	}
+	ec, ok := t.Config.Engines["opengrep"]
+	return ok && len(ec.Rules) > 0
 }
 
 func (s *Scanner) resolveRules(t scanner.Target) []string {
@@ -75,8 +101,19 @@ func (s *Scanner) resolveRules(t scanner.Target) []string {
 		if ec, ok := t.Config.Engines["opengrep"]; ok && len(ec.Rules) > 0 {
 			// Replaces rather than extends: a project that names its rules has
 			// said which rules it wants, and quietly adding ours to them would
-			// make the configured list a suggestion.
-			return ec.Rules
+			// make the configured list a suggestion. "builtin" is how a
+			// project asks for both.
+			out := make([]string, 0, len(ec.Rules))
+			for _, r := range ec.Rules {
+				if r != BuiltinRules {
+					out = append(out, r)
+					continue
+				}
+				if p, err := dragonrules.Dir(); err == nil && p != "" {
+					out = append(out, p)
+				}
+			}
+			return out
 		}
 	}
 	if len(rules) == 0 {

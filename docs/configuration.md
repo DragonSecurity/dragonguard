@@ -59,6 +59,7 @@ engines:
   opengrep:
     enabled: true
     rules:                            # OpenGrep configs: registry IDs or local paths
+      - builtin                       # DragonGuard's own pack; see below
       - p/security-audit
       - ./rules
 
@@ -158,7 +159,7 @@ produces something that parses and is wrong.
 
 | Engine | `rules` is | Notes |
 | --- | --- | --- |
-| `opengrep` | ruleset configs | Registry IDs (`p/security-audit`) or local paths. Multiple allowed. |
+| `opengrep` | ruleset configs | Registry IDs (`p/security-audit`), local paths, or `builtin`. Multiple allowed. |
 | `osv` | languages for call analysis | e.g. `[go, javascript]`. Not rulesets. |
 | `zap` | `[target-url]` | One entry. Required — no target is ever inferred. |
 | `schemathesis` | `[schema, base-url]` | **Two** entries, in that order. |
@@ -284,6 +285,40 @@ anything else. Anything more conditional than a list is written directly:
 `finding.license` and `finding.license_category` are empty strings for findings
 that are not about a licence, so a rule using them never errors — it simply
 does not match.
+
+## `rules:` replaces, it does not extend
+
+Naming a ruleset for an engine replaces its default. That is deliberate -- a
+project that says which rules it wants should get those rules -- but it has a
+consequence worth stating outright: setting `engines.opengrep.rules` switches
+DragonGuard's own pack **off**.
+
+`builtin` is how you keep it:
+
+```yaml
+engines:
+  opengrep:
+    rules:
+      - builtin           # DragonGuard's pack, embedded in the binary
+      - p/security-audit  # and a registry pack alongside it
+```
+
+It needs a name because it has no path: the pack is extracted to a temporary
+directory at scan time, so there is nothing stable to write in a config file.
+
+The order is preserved, because OpenGrep applies configs in order.
+
+**A scan says which sources it used**, in the evidence table, so this is never
+a guess:
+
+```
+  OK  opengrep       6 findings in 3074ms
+  ..                 rules: built-in pack, p/security-audit
+```
+
+With nothing configured it reads `built-in pack (engines.opengrep.rules not
+set)` -- which is the answer to "why does running the engine by hand disagree
+with the scan".
 
 ## What the regression gate compares against
 
