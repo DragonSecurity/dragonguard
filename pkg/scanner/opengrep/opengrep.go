@@ -28,6 +28,10 @@ const binary = "opengrep"
 
 // Scanner runs OpenGrep over a source tree.
 type Scanner struct {
+	// suppressed counts results the engine silenced in source during the last
+	// parse, so a scan can say how many rather than dropping them in silence.
+	suppressed int
+
 	// Rules overrides the rule configs passed with --config.
 	Rules []string
 }
@@ -182,13 +186,30 @@ func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding
 	return s.fromSARIF(log, t.Dir, rules), nil
 }
 
+// SuppressedInLastScan reports how many results the engine silenced in source
+// during the most recent parse.
+func (s *Scanner) SuppressedInLastScan() int { return s.suppressed }
+
 func (s *Scanner) fromSARIF(log *sarif.Log, dir string, configPaths []string) []finding.Finding {
+	s.suppressed = 0
 	var out []finding.Finding
 	for ri := range log.Runs {
 		run := &log.Runs[ri]
 		version := firstNonEmpty(run.Tool.Driver.SemanticVersion, run.Tool.Driver.Version)
 		for i := range run.Results {
 			res := &run.Results[i]
+			// A result the tool silenced is not a finding. SARIF carries
+			// suppressed results rather than omitting them -- the text output
+			// drops them, the SARIF does not -- so reading the file without
+			// checking this field reported every nosemgrep'd match anyway.
+			//
+			// It looked exactly like the comment being ignored, which is how
+			// it was reported: the engine honours it, and we were undoing it
+			// on the way in.
+			if res.Suppressed() {
+				s.suppressed++
+				continue
+			}
 			rule := run.RuleFor(res)
 
 			file, start, end, snippet := res.Primary()

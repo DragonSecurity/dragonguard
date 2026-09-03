@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/DragonSecurity/dragonguard/pkg/config"
+	"github.com/DragonSecurity/dragonguard/pkg/ingest/sarif"
 	"github.com/DragonSecurity/dragonguard/pkg/scanner"
 )
 
@@ -105,4 +106,68 @@ func TestTheBuiltinLabelDoesNotClaimItWasUnconfigured(t *testing.T) {
 	if strings.Contains(got[0], "not set") {
 		t.Errorf("label claims the rules were unconfigured when they name it: %q", got[0])
 	}
+}
+
+// SARIF carries suppressed results rather than omitting them, marked with a
+// suppressions array. Reading the file without checking that field reported
+// every nosemgrep'd match anyway -- which looked exactly like the engine
+// ignoring the comment, and is how it was reported.
+func TestSuppressedResultsAreHonouredNotReported(t *testing.T) {
+	log := &sarif.Log{Runs: []sarif.Run{{
+		Results: []sarif.Result{
+			{
+				RuleID:       "go.sql",
+				Message:      sarif.Message{Text: "silenced by a comment"},
+				Suppressions: []sarif.Suppression{{Kind: "inSource"}},
+				Locations:    []sarif.Location{loc("a.go", 12)},
+			},
+			{
+				RuleID:    "go.sql",
+				Message:   sarif.Message{Text: "not silenced"},
+				Locations: []sarif.Location{loc("a.go", 51)},
+			},
+		},
+	}}}
+
+	s := New()
+	got := s.fromSARIF(log, ".", nil)
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want only the unsuppressed one", len(got))
+	}
+	if got[0].Location.StartLine != 51 {
+		t.Errorf("kept the wrong result: line %d", got[0].Location.StartLine)
+	}
+	// Honoured, not hidden: a suppression nobody can see is indistinguishable
+	// from a scanner that stopped looking.
+	if n := s.SuppressedInLastScan(); n != 1 {
+		t.Errorf("SuppressedInLastScan = %d, want 1", n)
+	}
+}
+
+// The count is per parse, not cumulative, or a second scan in one process
+// reports the first scan's suppressions again.
+func TestTheSuppressionCountResetsEachParse(t *testing.T) {
+	suppressed := &sarif.Log{Runs: []sarif.Run{{Results: []sarif.Result{{
+		RuleID:       "go.sql",
+		Suppressions: []sarif.Suppression{{Kind: "inSource"}},
+		Locations:    []sarif.Location{loc("a.go", 1)},
+	}}}}}
+	clean := &sarif.Log{Runs: []sarif.Run{{Results: []sarif.Result{{
+		RuleID:    "go.sql",
+		Locations: []sarif.Location{loc("a.go", 1)},
+	}}}}}
+
+	s := New()
+	s.fromSARIF(suppressed, ".", nil)
+	s.fromSARIF(clean, ".", nil)
+	if n := s.SuppressedInLastScan(); n != 0 {
+		t.Errorf("SuppressedInLastScan = %d after a clean parse, want 0", n)
+	}
+}
+
+func loc(file string, line int) sarif.Location {
+	return sarif.Location{PhysicalLocation: &sarif.PhysicalLocation{
+		ArtifactLocation: &sarif.ArtifactLocation{URI: file},
+		Region:           &sarif.Region{StartLine: line, EndLine: line},
+	}}
 }

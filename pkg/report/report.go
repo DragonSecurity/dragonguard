@@ -183,6 +183,10 @@ func Text(w io.Writer, r *Result, opts Options) error {
 		// configurable. Running the engine by hand with one ruleset and
 		// DragonGuard with another gives different answers from what looks
 		// like the same tool, and the difference was invisible.
+		if e.Suppressed > 0 {
+			fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "",
+				p.c(dim, fmt.Sprintf("%d finding(s) suppressed in source", e.Suppressed)))
+		}
 		if len(e.Rules) > 0 {
 			fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "",
 				p.c(dim, "rules: "+strings.Join(e.Rules, ", ")))
