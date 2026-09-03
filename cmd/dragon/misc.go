@@ -138,10 +138,15 @@ engines:
     enabled: true
   opengrep:
     enabled: true
-    # Point at your own rules. Engine compatibility with Semgrep-format rules
-    # is not permission to redistribute someone else's ruleset; check the
-    # licence of any pack you bundle.
+    # This list replaces the default rather than adding to it, so "builtin"
+    # keeps DragonGuard's own pack in play. Dropping it is a decision, not a
+    # side effect of naming a second ruleset.
+    #
+    # Point at your own rules too. Engine compatibility with Semgrep-format
+    # rules is not permission to redistribute someone else's ruleset; check
+    # the licence of any pack you bundle.
     rules:
+      - builtin
       - p/security-audit
   gitleaks:
     enabled: true

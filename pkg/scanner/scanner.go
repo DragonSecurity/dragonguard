@@ -61,6 +61,26 @@ type Result struct {
 	DurationMS int64         `json:"duration_ms"`
 	Err        error         `json:"-"`
 	Error      string        `json:"error,omitempty"`
+	// Rules names where this engine's rules came from, for engines whose
+	// ruleset is configurable.
+	//
+	// Reported because the alternative is a silent divergence: running the
+	// engine by hand with one ruleset and DragonGuard with another produces
+	// different findings from what looks like the same tool, and nothing on
+	// screen says why. An unconfigured project falls back to the bundled
+	// pack, which is a good default and a surprising one to discover by
+	// comparing outputs.
+	Rules []string `json:"rules,omitempty"`
+}
+
+// RuleReporter is implemented by engines whose ruleset is configurable, so a
+// scan can say which rules produced its findings.
+//
+// A separate method rather than a field on the adapter: resolution depends on
+// the target, engines run concurrently, and a value stashed on the scanner
+// during Scan would be shared mutable state for the sake of a log line.
+type RuleReporter interface {
+	RulesFor(t Target) []string
 }
 
 // Registry holds the available adapters.
@@ -189,6 +209,9 @@ func (r *Registry) Run(ctx context.Context, t Target, opts RunOptions) []Result 
 			defer func() { <-sem }()
 
 			res := Result{Scanner: s.Name()}
+			if rr, ok := s.(RuleReporter); ok {
+				res.Rules = rr.RulesFor(t)
+			}
 			if opts.OnStart != nil {
 				opts.OnStart(s.Name())
 			}

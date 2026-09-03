@@ -45,11 +45,75 @@ func (s *Scanner) Available(ctx context.Context, t scanner.Target) (bool, string
 	return ok, reason
 }
 
-func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding, error) {
+// RulesFor reports where this scan's rules come from.
+//
+// Worth reporting because engines.opengrep.rules *replaces* the default rather
+// than adding to it, and an absent key falls back to a bundled pack. So
+// `opengrep --config p/security-audit` and `dragon scan` can run entirely
+// different rulesets and disagree completely, with nothing on screen to say
+// they were not asked the same question.
+func (s *Scanner) RulesFor(t scanner.Target) []string {
+	rules := s.resolveRules(t)
+	// The built-in pack resolves to a temporary extraction directory, and
+	// printing that path tells a reader nothing except that something
+	// unexplained is in /var/folders. Name it for what it is, and say that
+	// nothing was configured -- which is the fact worth knowing when a hand
+	// run of the engine disagrees with the scan.
+	// The label depends on how the pack was chosen. Saying "not set" when a
+	// project asked for it by name would be false, and the whole point of this
+	// line is that it can be trusted.
+	label := "built-in pack"
+	if !s.configured(t) {
+		label += " (engines.opengrep.rules not set)"
+	}
+	if embedded, err := dragonrules.Dir(); err == nil && embedded != "" {
+		for i, r := range rules {
+			if r == embedded {
+				rules[i] = label
+			}
+		}
+	}
+	return rules
+}
+
+// BuiltinRules is the name a project uses to include the pack embedded in the
+// binary alongside its own.
+//
+// It needs a name because it has no path: the pack is extracted to a temporary
+// directory at scan time, so there is nothing stable to write in a config
+// file. Without it, engines.opengrep.rules could only ever replace the
+// built-in rules, and "the defaults plus p/security-audit" was not expressible
+// at all.
+const BuiltinRules = "builtin"
+
+// configured reports whether the project named its own rules.
+func (s *Scanner) configured(t scanner.Target) bool {
+	if t.Config == nil {
+		return false
+	}
+	ec, ok := t.Config.Engines["opengrep"]
+	return ok && len(ec.Rules) > 0
+}
+
+func (s *Scanner) resolveRules(t scanner.Target) []string {
 	rules := s.Rules
 	if t.Config != nil {
 		if ec, ok := t.Config.Engines["opengrep"]; ok && len(ec.Rules) > 0 {
-			rules = ec.Rules
+			// Replaces rather than extends: a project that names its rules has
+			// said which rules it wants, and quietly adding ours to them would
+			// make the configured list a suggestion. "builtin" is how a
+			// project asks for both.
+			out := make([]string, 0, len(ec.Rules))
+			for _, r := range ec.Rules {
+				if r != BuiltinRules {
+					out = append(out, r)
+					continue
+				}
+				if p, err := dragonrules.Dir(); err == nil && p != "" {
+					out = append(out, p)
+				}
+			}
+			return out
 		}
 	}
 	if len(rules) == 0 {
@@ -63,6 +127,11 @@ func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding
 			rules = []string{p}
 		}
 	}
+	return rules
+}
+
+func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding, error) {
+	rules := s.resolveRules(t)
 	if len(rules) == 0 {
 		return nil, fmt.Errorf("no rules available: set engines.opengrep.rules in .dragon.yaml")
 	}
