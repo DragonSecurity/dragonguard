@@ -14,3 +14,5 @@ dragon.md
 
 # goreleaser build output
 dist/
+.dragon-buddy
+!.dragon-buddy/config.json
