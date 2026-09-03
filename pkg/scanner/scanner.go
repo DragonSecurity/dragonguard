@@ -71,6 +71,22 @@ type Result struct {
 	// pack, which is a good default and a surprising one to discover by
 	// comparing outputs.
 	Rules []string `json:"rules,omitempty"`
+	// Suppressed counts results the engine silenced in source -- a nosemgrep
+	// comment and the like -- which are honoured rather than reported.
+	//
+	// Counted rather than dropped in silence, for the reason every other
+	// filter here reports itself: a suppression nobody can see is
+	// indistinguishable from a scanner that stopped looking.
+	Suppressed int `json:"suppressed,omitempty"`
+}
+
+// SuppressionCounter is implemented by engines that honour in-source
+// suppressions, so a scan can say how many it respected.
+//
+// Read immediately after Scan, in the same goroutine, which is what makes a
+// count held on the adapter safe: one Scan per engine per pass.
+type SuppressionCounter interface {
+	SuppressedInLastScan() int
 }
 
 // RuleReporter is implemented by engines whose ruleset is configurable, so a
@@ -266,6 +282,9 @@ func (r *Registry) Run(ctx context.Context, t Target, opts RunOptions) []Result 
 				res.Error = err.Error()
 			}
 			res.Findings = fs
+			if sc, ok := s.(SuppressionCounter); ok {
+				res.Suppressed = sc.SuppressedInLastScan()
+			}
 			res.Count = len(fs)
 			results[i] = res
 			if opts.OnDone != nil {

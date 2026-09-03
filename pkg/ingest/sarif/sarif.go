@@ -78,7 +78,27 @@ type Result struct {
 	Fingerprints        map[string]string `json:"fingerprints"`
 	PartialFingerprints map[string]string `json:"partialFingerprints"`
 	Properties          map[string]any    `json:"properties"`
+	// Suppressions is present and non-empty when the tool decided this result
+	// should not be shown -- a nosemgrep comment, a baseline entry, an
+	// external suppression file.
+	//
+	// SARIF carries suppressed results rather than omitting them, which is
+	// what a report format should do: a consumer that wants to show what was
+	// silenced can, and one that does not has to say so deliberately. Ignoring
+	// the field means reporting findings the author explicitly suppressed, and
+	// it looks exactly like the suppression being broken.
+	Suppressions []Suppression `json:"suppressions"`
 }
+
+// Suppression records that a result was silenced, and by what.
+type Suppression struct {
+	// Kind is "inSource" for a comment in the code, "external" otherwise.
+	Kind          string `json:"kind"`
+	Justification string `json:"justification,omitempty"`
+}
+
+// Suppressed reports whether the tool silenced this result.
+func (r Result) Suppressed() bool { return len(r.Suppressions) > 0 }
 
 type Location struct {
 	PhysicalLocation *PhysicalLocation `json:"physicalLocation"`
