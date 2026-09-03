@@ -10,6 +10,7 @@ import (
 	"github.com/DragonSecurity/dragonguard/pkg/baseline"
 	"github.com/DragonSecurity/dragonguard/pkg/config"
 	"github.com/DragonSecurity/dragonguard/pkg/finding"
+	"github.com/DragonSecurity/dragonguard/pkg/report"
 	"github.com/DragonSecurity/dragonguard/pkg/scanner"
 )
 
@@ -267,4 +268,28 @@ func TestDefaultBranchResolution(t *testing.T) {
 			t.Errorf("defaultBranch = %q, want main", got)
 		}
 	})
+}
+
+// A release can move the numbers without a line of scanned code changing:
+// fingerprints alter, a suppression starts being honoured, a rule is added. A
+// scan that cannot say which build produced it leaves a posture drop
+// indistinguishable from an upgrade.
+func TestAScanRecordsTheBuildThatProducedIt(t *testing.T) {
+	prev := report.Version
+	report.Version = "0.5.7"
+	t.Cleanup(func() { report.Version = prev })
+
+	dir := t.TempDir()
+	res, err := Run(context.Background(), Options{
+		Dir:      dir,
+		Config:   testConfig(t, dir, config.Asset{Name: "t"}),
+		Registry: scanner.NewRegistry(),
+		Offline:  true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.DragonVersion != "0.5.7" {
+		t.Errorf("DragonVersion = %q, want the running build", res.DragonVersion)
+	}
 }

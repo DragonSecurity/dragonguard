@@ -71,6 +71,10 @@ type IngestRequest struct {
 
 	Findings []finding.Finding `json:"findings"`
 
+	// DragonVersion is the build that produced this scan, so the platform can
+	// tell a posture change caused by the code from one caused by an upgrade.
+	DragonVersion string `json:"dragon_version,omitempty"`
+
 	// Components is the inventory the scan observed, findings or not. A clean
 	// dependency is still a dependency the platform needs to know about: it is
 	// what a future advisory gets matched against, and what "which projects

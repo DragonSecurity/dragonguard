@@ -317,16 +317,17 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 	}
 
 	return &report.Result{
-		Ignored:     ignoreReport,
-		Excluded:    excludedReport,
-		Components:  graph.Sorted(),
-		Scorecard:   sc,
-		Decision:    decision,
-		Findings:    findings,
-		Evaluations: evaluations,
-		Engines:     engineResults,
-		Enrichment:  enrichReport,
-		Fixed:       fixed,
+		DragonVersion: report.Version,
+		Ignored:       ignoreReport,
+		Excluded:      excludedReport,
+		Components:    graph.Sorted(),
+		Scorecard:     sc,
+		Decision:      decision,
+		Findings:      findings,
+		Evaluations:   evaluations,
+		Engines:       engineResults,
+		Enrichment:    enrichReport,
+		Fixed:         fixed,
 	}, nil
 }
 
