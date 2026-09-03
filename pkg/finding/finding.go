@@ -288,6 +288,37 @@ type Finding struct {
 // SAST is the exception: rule semantics are engine-specific, so two engines
 // flagging the same line are making two different claims about it, and the
 // scanner stays part of the identity.
+// siteOf distinguishes one occurrence of a rule in a file from another.
+//
+// Without it a rule was one finding per file however many times it matched:
+// three SQL injections in three functions collapsed into one, so two of the
+// three defects were invisible, and fixing the reported one left the finding
+// open because another site kept it alive. A suppression comment on one site
+// looked like it had been ignored, for the same reason.
+//
+// The matched text rather than the line number, because the line is what the
+// fingerprint was avoiding in the first place: adding a comment above a
+// function would otherwise renumber every finding below it and report a file
+// of unchanged problems as new. Text moves with the code.
+//
+// Whitespace is collapsed so reindentation is not a new finding. Two textually
+// identical matches in one file still merge -- there is nothing left to tell
+// them apart that does not reintroduce the line -- and a finding whose engine
+// reports no snippet keeps the old file-level identity.
+//
+// For secrets this hashes the redacted form, which is what the adapters store.
+// The plaintext must not reach a fingerprint: fingerprints are written to
+// reports, snapshots and the platform database, and a hash of a live
+// credential is a verifier for it.
+func siteOf(f *Finding) string {
+	snippet := strings.Join(strings.Fields(f.Location.Snippet), " ")
+	if snippet == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(snippet))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
 func (f *Finding) ComputeFingerprint() string {
 	h := sha256.New()
 	parts := []string{string(f.Category)}
@@ -308,14 +339,13 @@ func (f *Finding) ComputeFingerprint() string {
 		}
 
 	case CategorySecret:
-		// Kind of credential plus location. Line is excluded for the same
-		// reason as everywhere else, which does mean two credentials of the
-		// same kind in one file merge into one finding -- the right trade,
-		// since the remediation is identical and the file gets audited once.
-		parts = append(parts, f.RuleID, f.Location.File)
+		// Kind of credential, location, and which credential. Two keys in one
+		// file are two keys: they are rotated separately, and merging them
+		// meant fixing one and watching the finding stay open.
+		parts = append(parts, f.RuleID, f.Location.File, siteOf(f))
 
 	case CategoryIaC, CategoryDAST:
-		parts = append(parts, f.RuleID, f.Location.File)
+		parts = append(parts, f.RuleID, f.Location.File, siteOf(f))
 
 	case CategoryLicense:
 		name := ""
@@ -327,7 +357,7 @@ func (f *Finding) ComputeFingerprint() string {
 	default:
 		// SAST and anything unrecognized: keep the scanner, because the rule
 		// only means something in the context of the engine that defined it.
-		parts = append(parts, f.Scanner, f.RuleID, f.Location.File)
+		parts = append(parts, f.Scanner, f.RuleID, f.Location.File, siteOf(f))
 	}
 
 	for _, p := range parts {
