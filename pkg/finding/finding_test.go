@@ -232,3 +232,108 @@ func TestCanonicalVersionOnlyStripsAVersionPrefix(t *testing.T) {
 		}
 	}
 }
+
+// Three matches of one rule in one file are three defects. They collapsed into
+// one, so two were invisible -- and fixing the reported one left the finding
+// open, because another site kept the same fingerprint alive.
+func TestSeparateSitesAreSeparateFindings(t *testing.T) {
+	at := func(line int, snippet string) Finding {
+		return Finding{
+			Category: CategorySAST, Scanner: "opengrep", RuleID: "go.sql-concat",
+			Location: Location{File: "a.go", StartLine: line, Snippet: snippet},
+		}
+	}
+	a := at(9, `db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", name))`)
+	b := at(13, `db.Exec(fmt.Sprintf("DELETE FROM %s", table))`)
+	c := at(17, `db.Exec(fmt.Sprintf("TRUNCATE %s", table))`)
+
+	seen := map[string]bool{}
+	for _, f := range []Finding{a, b, c} {
+		fp := f.ComputeFingerprint()
+		if seen[fp] {
+			t.Fatalf("two sites share a fingerprint: %s", fp)
+		}
+		seen[fp] = true
+	}
+}
+
+// The line is still not part of the identity, which is the whole reason it was
+// excluded: adding a comment above a function would otherwise renumber every
+// finding below it and report a file of unchanged problems as new.
+func TestASiteKeepsItsIdentityWhenTheCodeMovesDown(t *testing.T) {
+	snippet := `db.Exec(fmt.Sprintf("DELETE FROM %s", table))`
+	before := Finding{
+		Category: CategorySAST, Scanner: "opengrep", RuleID: "go.sql-concat",
+		Location: Location{File: "a.go", StartLine: 13, Snippet: snippet},
+	}
+	after := before
+	after.Location.StartLine = 48
+
+	if before.ComputeFingerprint() != after.ComputeFingerprint() {
+		t.Error("the same code at a different line became a new finding")
+	}
+}
+
+// Reindentation is not a new defect.
+func TestReindentingIsNotANewFinding(t *testing.T) {
+	tight := Finding{
+		Category: CategorySAST, Scanner: "opengrep", RuleID: "go.sql-concat",
+		Location: Location{File: "a.go", Snippet: `db.Exec(fmt.Sprintf("X %s", v))`},
+	}
+	loose := tight
+	loose.Location.Snippet = "\t\tdb.Exec(fmt.Sprintf(\"X  %s\",   v))\n"
+
+	if tight.ComputeFingerprint() == loose.ComputeFingerprint() {
+		return // collapsed whitespace matched, which is the intent
+	}
+	t.Error("reindented code produced a different fingerprint")
+}
+
+// Two secrets in one file are two rotations. The redacted form is what
+// distinguishes them, because the plaintext must never reach a fingerprint --
+// fingerprints are written to reports, snapshots and the platform database.
+func TestTwoSecretsInOneFileAreTwoFindings(t *testing.T) {
+	a := Finding{
+		Category: CategorySecret, RuleID: "generic-api-key",
+		Location: Location{File: ".env", Snippet: "AWS_SECRET_ACCESS_KEY=REDACTED"},
+	}
+	b := Finding{
+		Category: CategorySecret, RuleID: "generic-api-key",
+		Location: Location{File: ".env", Snippet: "STRIPE_SECRET_KEY=REDACTED"},
+	}
+	if a.ComputeFingerprint() == b.ComputeFingerprint() {
+		t.Error("two different credentials in one file merged into one finding")
+	}
+}
+
+// An engine that reports no snippet keeps the old file-level identity rather
+// than every finding becoming its own, which would be worse: an empty
+// discriminator must not be mistaken for a distinguishing one.
+func TestNoSnippetFallsBackToFileIdentity(t *testing.T) {
+	a := Finding{
+		Category: CategorySAST, Scanner: "opengrep", RuleID: "r",
+		Location: Location{File: "a.go", StartLine: 1},
+	}
+	b := a
+	b.Location.StartLine = 99
+
+	if a.ComputeFingerprint() != b.ComputeFingerprint() {
+		t.Error("without a snippet the identity should still be file-level")
+	}
+}
+
+// A vulnerable component is identified by what it is. Nothing about this
+// change should touch that.
+func TestDependencyIdentityIsUnchangedByTheSiteDiscriminator(t *testing.T) {
+	a := Finding{
+		Category: CategorySCA, CVE: []string{"CVE-2026-1"},
+		Package:  &Package{Ecosystem: "npm", Name: "lodash", Version: "4.17.11"},
+		Location: Location{File: "ui/yarn.lock", Snippet: "lodash@4.17.11"},
+	}
+	b := a
+	b.Location.Snippet = "something else entirely"
+
+	if a.ComputeFingerprint() != b.ComputeFingerprint() {
+		t.Error("a dependency finding's identity changed with its snippet")
+	}
+}
