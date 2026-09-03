@@ -104,6 +104,7 @@ command line ends up in shell history and in CI logs.`,
 				Trigger:        orEmptyStr(trigger, "cli_ingest"),
 				Findings:       res.Findings,
 				Components:     res.Components,
+				DragonVersion:  res.DragonVersion,
 				RecordBaseline: record,
 			}
 			if prNumber > 0 {

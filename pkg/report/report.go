@@ -31,6 +31,15 @@ type Result struct {
 	// Surfaced rather than dropped silently: a filter nobody can see is
 	// indistinguishable from a scanner that missed something.
 	Ignored vcs.FilterReport `json:"ignored"`
+	// DragonVersion is the build that produced this scan.
+	//
+	// Recorded because the engine changes what it reports: a release that
+	// alters fingerprints, honours a suppression it previously ignored, or
+	// adds a rule moves the numbers without a line of the scanned code
+	// changing. Without it, a posture drop is indistinguishable from an
+	// upgrade, and the first question about any surprising scan -- what
+	// produced this -- has no answer in the artifact itself.
+	DragonVersion string `json:"dragon_version,omitempty"`
 	// Components is every package the scan observed, not only the ones that
 	// carry a finding.
 	//
