@@ -179,6 +179,14 @@ func Text(w io.Writer, r *Result, opts Options) error {
 			fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(green, "OK"), e.Scanner,
 				p.c(dim, fmt.Sprintf("%d findings in %dms", e.Count, e.DurationMS)))
 		}
+		// Which rules produced that, for engines whose ruleset is
+		// configurable. Running the engine by hand with one ruleset and
+		// DragonGuard with another gives different answers from what looks
+		// like the same tool, and the difference was invisible.
+		if len(e.Rules) > 0 {
+			fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "",
+				p.c(dim, "rules: "+strings.Join(e.Rules, ", ")))
+		}
 	}
 	intel := "EPSS " + sourceLabel(r.Enrichment.EPSSSource) + ", KEV " + sourceLabel(r.Enrichment.KEVSource)
 	fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "intelligence", p.c(dim, intel))

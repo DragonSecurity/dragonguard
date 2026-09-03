@@ -45,11 +45,38 @@ func (s *Scanner) Available(ctx context.Context, t scanner.Target) (bool, string
 	return ok, reason
 }
 
-func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding, error) {
+// RulesFor reports where this scan's rules come from.
+//
+// Worth reporting because engines.opengrep.rules *replaces* the default rather
+// than adding to it, and an absent key falls back to a bundled pack. So
+// `opengrep --config p/security-audit` and `dragon scan` can run entirely
+// different rulesets and disagree completely, with nothing on screen to say
+// they were not asked the same question.
+func (s *Scanner) RulesFor(t scanner.Target) []string {
+	rules := s.resolveRules(t)
+	// The built-in pack resolves to a temporary extraction directory, and
+	// printing that path tells a reader nothing except that something
+	// unexplained is in /var/folders. Name it for what it is, and say that
+	// nothing was configured -- which is the fact worth knowing when a hand
+	// run of the engine disagrees with the scan.
+	if embedded, err := dragonrules.Dir(); err == nil && embedded != "" {
+		for i, r := range rules {
+			if r == embedded {
+				rules[i] = "built-in pack (engines.opengrep.rules not set)"
+			}
+		}
+	}
+	return rules
+}
+
+func (s *Scanner) resolveRules(t scanner.Target) []string {
 	rules := s.Rules
 	if t.Config != nil {
 		if ec, ok := t.Config.Engines["opengrep"]; ok && len(ec.Rules) > 0 {
-			rules = ec.Rules
+			// Replaces rather than extends: a project that names its rules has
+			// said which rules it wants, and quietly adding ours to them would
+			// make the configured list a suggestion.
+			return ec.Rules
 		}
 	}
 	if len(rules) == 0 {
@@ -63,6 +90,11 @@ func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding
 			rules = []string{p}
 		}
 	}
+	return rules
+}
+
+func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding, error) {
+	rules := s.resolveRules(t)
 	if len(rules) == 0 {
 		return nil, fmt.Errorf("no rules available: set engines.opengrep.rules in .dragon.yaml")
 	}
