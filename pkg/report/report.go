@@ -261,6 +261,20 @@ func writeFinding(w io.Writer, p painter, f finding.Finding) {
 	if cve := f.PrimaryCVE(); cve != "" {
 		meta = append(meta, cve)
 	}
+	// The rule id, for the categories where a person suppresses by naming one.
+	//
+	// Without it the only identifier on screen is the human-readable title,
+	// and a suppression comment needs the id -- so somebody reaching for
+	// "// nosemgrep: ..." has to guess. The predictable guess is the upstream
+	// registry rule whose message looks similar, which silently suppresses
+	// nothing, because a rule-scoped comment only applies to the rule it
+	// names. It reads as the engine ignoring the comment.
+	//
+	// SAST and IaC only: a CVE already identifies an SCA finding, and adding
+	// the scanner's internal id beside it is noise.
+	if f.RuleID != "" && (f.Category == finding.CategorySAST || f.Category == finding.CategoryIaC) {
+		meta = append(meta, f.RuleID)
+	}
 	if f.Threat.KEV {
 		meta = append(meta, "KEV")
 	}
