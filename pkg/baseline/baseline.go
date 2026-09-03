@@ -385,9 +385,9 @@ func (b *Baseline) regressionGates(d *Decision, sc *scorecard.Scorecard, prev *s
 			d.Checks = append(d.Checks, Check{
 				Gate: "regression", Name: "overall regression", Passed: true,
 				Required:     fmt.Sprintf("<= %.0f point drop", *b.MaximumScoreRegression),
-				Actual:       "not evaluated: no baseline recorded",
+				Actual:       "not evaluated: nothing recorded",
 				Verdict:      VerdictWarn,
-				Detail:       "no baseline for the default branch to compare against",
+				Detail:       "no snapshot recorded for the default branch to compare against; run `dragon scan --record` there",
 				NotEvaluated: true,
 			})
 		}
@@ -398,9 +398,9 @@ func (b *Baseline) regressionGates(d *Decision, sc *scorecard.Scorecard, prev *s
 			d.Checks = append(d.Checks, Check{
 				Gate: "regression", Name: name + " regression", Passed: true,
 				Required:     fmt.Sprintf("<= %.0f point drop", *b.Dimensions[name].MaximumRegression),
-				Actual:       "not evaluated: no baseline recorded",
+				Actual:       "not evaluated: nothing recorded",
 				Verdict:      VerdictWarn,
-				Detail:       "no baseline for the default branch to compare against",
+				Detail:       "no snapshot recorded for the default branch to compare against; run `dragon scan --record` there",
 				NotEvaluated: true,
 			})
 		}

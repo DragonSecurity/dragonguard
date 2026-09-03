@@ -205,7 +205,12 @@ func Text(w io.Writer, r *Result, opts Options) error {
 		if r.Decision.HasPrevious {
 			fmt.Fprintf(w, "   %s", p.c(dim, fmt.Sprintf("posture %.0f (was %.0f)", r.Decision.Score, r.Decision.PreviousScore)))
 		} else {
-			fmt.Fprintf(w, "   %s", p.c(dim, fmt.Sprintf("posture %.0f (no baseline recorded)", r.Decision.Score)))
+			// Not "no baseline recorded". The baseline is .dragon-baseline.yaml
+			// and it is plainly loaded -- every threshold printed above came
+			// out of it. What is missing is the recorded snapshot the
+			// regression gate compares against, and calling that a baseline
+			// too has people checking a file that was never the problem.
+			fmt.Fprintf(w, "   %s", p.c(dim, fmt.Sprintf("posture %.0f (nothing recorded to compare against)", r.Decision.Score)))
 		}
 		fmt.Fprintln(w)
 

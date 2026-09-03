@@ -285,6 +285,16 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 	if bl == nil {
 		bl = baseline.Default()
 	}
+	// Said out loud, the way the policy packs are. Every threshold in the
+	// output comes from this file, but a reader cannot tell a loaded baseline
+	// from the built-in defaults by looking at the numbers -- and when the
+	// regression row says nothing was recorded, the natural conclusion is that
+	// the file was not read at all. Naming it settles that before it is asked.
+	if bl.Path != "" {
+		progress("baseline: " + bl.Path)
+	} else {
+		progress("baseline: built-in defaults (none configured)")
+	}
 	var prevCard *scorecard.Scorecard
 	if prev != nil {
 		prevCard = prev.Scorecard
