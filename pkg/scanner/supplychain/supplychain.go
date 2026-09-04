@@ -72,6 +72,10 @@ func New() *Scanner { return &Scanner{Client: depsdev.New(), Concurrency: 8} }
 
 func (s *Scanner) Name() string { return Name }
 
+// NeedsInventory marks this engine as second-pass: it assesses what the
+// lockfile readers resolved, so it cannot run alongside them.
+func (s *Scanner) NeedsInventory() bool { return true }
+
 func (s *Scanner) Categories() []finding.Category {
 	return []finding.Category{finding.CategorySupplyChain}
 }

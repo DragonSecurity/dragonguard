@@ -125,9 +125,9 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 	target := scanner.Target{Dir: opts.Dir, Image: opts.Image, Config: cfg}
 	engineResults := reg.Run(ctx, target, scanner.RunOptions{
 		Only: only,
-		// Held back for the second pass: it assesses the components the
+		// Held back for the second pass: these assess the components the
 		// lockfile readers resolve, and there are none yet.
-		Except:     []string{supplychain.Name},
+		Except:     reg.InventoryScanners(),
 		Categories: opts.Categories,
 		Timeout:    opts.EngineTimeout,
 		OnStart:    func(n string) { progress("scanning: " + n) },
@@ -162,7 +162,7 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 		inventoryTarget := target
 		inventoryTarget.Components = components
 		engineResults = append(engineResults, reg.Run(ctx, inventoryTarget, scanner.RunOptions{
-			Only:       []string{supplychain.Name},
+			Only:       reg.InventoryScanners(),
 			Categories: opts.Categories,
 			Timeout:    opts.EngineTimeout,
 			OnStart:    func(n string) { progress("scanning: " + n) },

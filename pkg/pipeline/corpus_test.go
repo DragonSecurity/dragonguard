@@ -248,6 +248,13 @@ func requireEngines(t *testing.T, cfg *config.Config, dir string) {
 		if ec, ok := cfg.Engines[s.Name()]; ok && !ec.IsEnabled() {
 			continue
 		}
+		// An engine that assesses the resolved inventory is correctly
+		// unavailable before there is one. Asking it here is asking a
+		// first-pass question of a second-pass engine, and the honest answer
+		// reads as a missing binary.
+		if inv, ok := s.(scanner.InventoryScanner); ok && inv.NeedsInventory() {
+			continue
+		}
 		target := scanner.Target{Dir: dir, Config: cfg}
 		if ok, reason := s.Available(context.Background(), target); !ok {
 			missing = append(missing, fmt.Sprintf("%s (%s)", s.Name(), reason))
