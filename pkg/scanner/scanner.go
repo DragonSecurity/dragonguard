@@ -27,6 +27,13 @@ type Target struct {
 	Image string
 	// Config carries project context so an adapter can honour ignore globs.
 	Config *config.Config
+	// Components is the resolved inventory, for engines that assess what was
+	// found rather than reading the tree themselves.
+	//
+	// Empty during the first pass, because it is what the first pass produces.
+	// An engine that needs it reports itself unavailable until it has one,
+	// which is the same answer a DAST engine gives with no target configured.
+	Components []PackageNode
 }
 
 // Scanner is one security engine.
@@ -172,6 +179,9 @@ func (r *Registry) ForCategories(cats []finding.Category) []Scanner {
 type RunOptions struct {
 	// Only restricts the run to these scanner names when non-empty.
 	Only []string
+	// Except excludes these scanner names. Used to hold back engines that
+	// assess the inventory until there is one to assess.
+	Except []string
 	// Categories restricts the run to engines producing these categories.
 	Categories []finding.Category
 	// Concurrency caps engines running at once. Zero means one per engine.
@@ -203,6 +213,20 @@ func (r *Registry) Run(ctx context.Context, t Target, opts RunOptions) []Result 
 			}
 		}
 		scanners = filtered
+	}
+
+	if len(opts.Except) > 0 {
+		skip := make(map[string]bool, len(opts.Except))
+		for _, n := range opts.Except {
+			skip[n] = true
+		}
+		var kept []Scanner
+		for _, s := range scanners {
+			if !skip[s.Name()] {
+				kept = append(kept, s)
+			}
+		}
+		scanners = kept
 	}
 
 	conc := opts.Concurrency

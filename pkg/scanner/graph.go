@@ -16,6 +16,14 @@ type PackageNode struct {
 	PURL      string `json:"purl,omitempty"`
 	// Direct reports that the project's own manifest names this package.
 	Direct bool `json:"direct"`
+	// Root marks the scanned project's own package rather than a dependency.
+	//
+	// A lockfile's root entry is the project itself -- "ui@0.0.0" for a
+	// workspace, the module under scan for Go -- and it is direct in every
+	// sense, which is exactly why it needs distinguishing. Asking a public
+	// registry about it returns a confident answer about somebody else's
+	// package of the same name.
+	Root bool `json:"root,omitempty"`
 	// Directness records how Direct was decided: "relationship", "indirect",
 	// or "unknown" when the scanner classified nothing for this target.
 	//

@@ -254,6 +254,20 @@ func (c *Client) SourceRepo(ctx context.Context, sys System, name, version strin
 
 // ScorecardFor resolves a package to its source project's Scorecard in one
 // call. Returns nil when the package, the project or the Scorecard is unknown.
+// Deprecated reports whether the publisher has marked this version
+// deprecated.
+//
+// The strongest supply-chain signal there is, and the least ambiguous: it is
+// the upstream saying stop using this, in its own registry, rather than an
+// inference drawn from commit activity.
+func (c *Client) Deprecated(ctx context.Context, sys System, name, version string) (bool, error) {
+	v, err := c.version(ctx, sys, name, version)
+	if err != nil || v == nil {
+		return false, err
+	}
+	return v.IsDeprecated, nil
+}
+
 func (c *Client) ScorecardFor(ctx context.Context, sys System, name, version string) (*Scorecard, error) {
 	repo, err := c.SourceRepo(ctx, sys, name, version)
 	if err != nil || repo == "" {
@@ -335,6 +349,13 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
 	// A cancelled context says nothing about the resource, so caching it
 	// would poison every later lookup in the same run.
 	if ctx.Err() == nil {
+		if c.cache == nil {
+			// Every field on this struct is exported, so it invites being
+			// built directly rather than through New -- and a nil map turns
+			// that into a panic on the first successful request rather than
+			// an obvious error at construction.
+			c.cache = map[string]cacheEntry{}
+		}
 		c.cache[path] = cacheEntry{data: data, err: err}
 	}
 	c.mu.Unlock()
