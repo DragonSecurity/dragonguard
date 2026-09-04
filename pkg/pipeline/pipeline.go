@@ -37,6 +37,7 @@ import (
 	"github.com/DragonSecurity/dragonguard/pkg/scanner/gitleaks"
 	"github.com/DragonSecurity/dragonguard/pkg/scanner/opengrep"
 	"github.com/DragonSecurity/dragonguard/pkg/scanner/osv"
+	"github.com/DragonSecurity/dragonguard/pkg/scanner/supplychain"
 	"github.com/DragonSecurity/dragonguard/pkg/scanner/trivy"
 	"github.com/DragonSecurity/dragonguard/pkg/scorecard"
 	"github.com/DragonSecurity/dragonguard/pkg/state"
@@ -84,6 +85,9 @@ func DefaultRegistry() *scanner.Registry {
 	// API dimension as unassessed rather than scanning something by accident.
 	r.Register(dast.NewZAP())
 	r.Register(dast.NewSchemathesis())
+	// Assesses the inventory the others produce, so it runs in a second pass
+	// and reports itself unavailable until there is one.
+	r.Register(supplychain.New())
 	return r
 }
 
@@ -120,7 +124,10 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 
 	target := scanner.Target{Dir: opts.Dir, Image: opts.Image, Config: cfg}
 	engineResults := reg.Run(ctx, target, scanner.RunOptions{
-		Only:       only,
+		Only: only,
+		// Held back for the second pass: these assess the components the
+		// lockfile readers resolve, and there are none yet.
+		Except:     reg.InventoryScanners(),
 		Categories: opts.Categories,
 		Timeout:    opts.EngineTimeout,
 		OnStart:    func(n string) { progress("scanning: " + n) },
@@ -143,6 +150,34 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 	graph := scanner.NewPackageGraph()
 	for _, r := range engineResults {
 		graph.Merge(r.Graph)
+	}
+
+	// --- second pass: engines that assess the inventory ---
+	//
+	// Separate because the question is different. The first pass reads the
+	// tree; this one reads what the tree resolved to, which does not exist
+	// until the first pass has finished. Running it in the same pass would
+	// mean assessing an empty inventory and reporting the dimension clean.
+	if components := graph.Sorted(); len(components) > 0 {
+		inventoryTarget := target
+		inventoryTarget.Components = components
+		engineResults = append(engineResults, reg.Run(ctx, inventoryTarget, scanner.RunOptions{
+			Only:       reg.InventoryScanners(),
+			Categories: opts.Categories,
+			Timeout:    opts.EngineTimeout,
+			OnStart:    func(n string) { progress("scanning: " + n) },
+			OnDone: func(r scanner.Result) {
+				switch {
+				case r.Skipped:
+					progress(fmt.Sprintf("skipped %s: %s", r.Scanner, r.Reason))
+				case r.Error != "":
+					progress(fmt.Sprintf("%s failed: %s", r.Scanner, r.Error))
+				default:
+					progress(fmt.Sprintf("%s: %d findings", r.Scanner, r.Count))
+				}
+			},
+		})...)
+		findings = append(findings, scanner.Collect(engineResults[len(engineResults)-1:], now)...)
 	}
 
 	// Apply the configured ignore list to every engine's output, not just the

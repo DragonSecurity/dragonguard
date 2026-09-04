@@ -27,6 +27,13 @@ type Target struct {
 	Image string
 	// Config carries project context so an adapter can honour ignore globs.
 	Config *config.Config
+	// Components is the resolved inventory, for engines that assess what was
+	// found rather than reading the tree themselves.
+	//
+	// Empty during the first pass, because it is what the first pass produces.
+	// An engine that needs it reports itself unavailable until it has one,
+	// which is the same answer a DAST engine gives with no target configured.
+	Components []PackageNode
 }
 
 // Scanner is one security engine.
@@ -87,6 +94,30 @@ type Result struct {
 // count held on the adapter safe: one Scan per engine per pass.
 type SuppressionCounter interface {
 	SuppressedInLastScan() int
+}
+
+// InventoryScanner is implemented by engines that assess the resolved
+// inventory rather than reading the source tree.
+//
+// They run in a second pass, because what they read is what the first pass
+// produces. Declaring it rather than naming them lets the pipeline hold them
+// back, and lets anything checking engine availability up front know not to
+// ask -- an engine that needs an inventory is correctly unavailable before
+// there is one, which is a fact about ordering rather than about the engine
+// being broken.
+type InventoryScanner interface {
+	NeedsInventory() bool
+}
+
+// InventoryScanners returns the registered engines that assess the inventory.
+func (r *Registry) InventoryScanners() []string {
+	var out []string
+	for _, s := range r.All() {
+		if inv, ok := s.(InventoryScanner); ok && inv.NeedsInventory() {
+			out = append(out, s.Name())
+		}
+	}
+	return out
 }
 
 // RuleReporter is implemented by engines whose ruleset is configurable, so a
@@ -172,6 +203,9 @@ func (r *Registry) ForCategories(cats []finding.Category) []Scanner {
 type RunOptions struct {
 	// Only restricts the run to these scanner names when non-empty.
 	Only []string
+	// Except excludes these scanner names. Used to hold back engines that
+	// assess the inventory until there is one to assess.
+	Except []string
 	// Categories restricts the run to engines producing these categories.
 	Categories []finding.Category
 	// Concurrency caps engines running at once. Zero means one per engine.
@@ -203,6 +237,20 @@ func (r *Registry) Run(ctx context.Context, t Target, opts RunOptions) []Result 
 			}
 		}
 		scanners = filtered
+	}
+
+	if len(opts.Except) > 0 {
+		skip := make(map[string]bool, len(opts.Except))
+		for _, n := range opts.Except {
+			skip[n] = true
+		}
+		var kept []Scanner
+		for _, s := range scanners {
+			if !skip[s.Name()] {
+				kept = append(kept, s)
+			}
+		}
+		scanners = kept
 	}
 
 	conc := opts.Concurrency

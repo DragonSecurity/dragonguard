@@ -268,6 +268,7 @@ func (s *Scanner) ScanWithGraph(ctx context.Context, t scanner.Target) ([]findin
 				Version:    p.Version,
 				PURL:       p.Identifier.PURL,
 				Direct:     isDirect(p, directnessFor[res.Target]),
+				Root:       strings.EqualFold(p.Relationship, "root"),
 				Directness: directnessFor[res.Target].String(),
 				DevOnly:    p.Dev,
 				DependsOn:  p.DependsOn,
