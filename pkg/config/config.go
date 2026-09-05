@@ -3,10 +3,13 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -145,6 +148,22 @@ type Config struct {
 	// attached to the finding.
 	VerifySecrets bool `yaml:"verify_secrets,omitempty" json:"verify_secrets,omitempty"`
 
+	// Unrecognized names keys this build read and did not understand.
+	//
+	// YAML unmarshalling ignores an unknown key in silence, which for a
+	// configuration file is the worst of the available behaviours. A typo does
+	// nothing and says nothing. A block copied from the documentation of a
+	// newer release does nothing and says nothing -- the setting is right
+	// there in the file, the scan behaves as though it were absent, and there
+	// is no way to tell which of the two is happening.
+	//
+	// Reported rather than refused, because both cases want the same answer.
+	// Refusing would mean a config written for a newer DragonGuard cannot run
+	// on an older one at all, which turns a warning into an outage; ignoring
+	// means somebody spends an afternoon on a setting that was never read.
+	// Not serialized.
+	Unrecognized []string `yaml:"-" json:"-"`
+
 	// Dir is the directory the config was loaded from. Not serialized.
 	Dir string `yaml:"-" json:"-"`
 	// Path is where the config was loaded from, empty if defaults were used.
@@ -198,6 +217,7 @@ func Load(path, dir string) (*Config, error) {
 	if err != nil {
 		abs = path
 	}
+	c.Unrecognized = unrecognizedKeys(raw)
 	c.Path = abs
 	c.Dir = filepath.Dir(abs)
 	if c.Asset.Name == "" {
@@ -207,6 +227,65 @@ func Load(path, dir string) (*Config, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// unrecognizedKeys re-reads the document with strict field checking and
+// collects the names it did not know.
+//
+// A second decode rather than making the first one strict. The first decode is
+// what produces the configuration, and it has to keep succeeding: a key from a
+// newer release must not stop an older build from scanning. This one exists
+// only to notice, and its own failure is not interesting -- a document that
+// does not parse at all was already reported by the decode that matters.
+func unrecognizedKeys(raw []byte) []string {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+
+	var probe Config
+	err := dec.Decode(&probe)
+	if err == nil {
+		return nil
+	}
+	var te *yaml.TypeError
+	if !errors.As(err, &te) {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	var out []string
+	for _, msg := range te.Errors {
+		name := fieldFromTypeError(msg)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// fieldNotFound matches the one thing this cares about in a yaml type error.
+// Anything else -- a string where a number belongs, say -- is a real parse
+// problem that the decode which produced the configuration already reported.
+var fieldNotFound = regexp.MustCompile(`field ([^\s]+) not found`)
+
+func fieldFromTypeError(msg string) string {
+	m := fieldNotFound.FindStringSubmatch(msg)
+	if len(m) != 2 {
+		return ""
+	}
+	return m[1]
+}
+
+// UnrecognizedNote renders a one-line summary, or empty when everything in the
+// file was understood.
+func (c *Config) UnrecognizedNote() string {
+	if len(c.Unrecognized) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d setting(s) this build does not understand were ignored: %s",
+		len(c.Unrecognized), strings.Join(c.Unrecognized, ", "))
 }
 
 // discover walks up from dir looking for a config file, stopping at the

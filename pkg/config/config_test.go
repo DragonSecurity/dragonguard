@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -358,5 +359,128 @@ func TestSupplyChainThresholdsMustBeOnTheScorecardScale(t *testing.T) {
 	}
 	if err := (SupplyChainPolicy{MinScorecard: 6, QuietBelow: 7}).validate(); err != nil {
 		t.Errorf("a valid pair was refused: %v", err)
+	}
+}
+
+// The failure this replaces: a configuration written against a newer release
+// loads on an older build, the setting is plainly there in the file, and the
+// scan behaves exactly as though it were absent. Nothing on screen
+// distinguishes that from a typo, or from the feature not working.
+func TestASettingThisBuildDoesNotUnderstandIsReported(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".dragon.yaml")
+	if err := os.WriteFile(path, []byte(`version: dragonguard/v1
+project: example
+# A block from a future release, and a typo, and a nested one.
+teleport: true
+licenses:
+  alow:
+    - id: MPL-2.0
+      reason: consumed unmodified
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path, dir)
+	if err != nil {
+		// Reported, never refused: a config written for a newer DragonGuard
+		// must still run on an older one, or a warning becomes an outage.
+		t.Fatalf("an unrecognized key must not stop the config loading: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, k := range cfg.Unrecognized {
+		got[k] = true
+	}
+	for _, want := range []string{"teleport", "alow"} {
+		if !got[want] {
+			t.Errorf("%q was ignored in silence; Unrecognized = %v", want, cfg.Unrecognized)
+		}
+	}
+	if cfg.UnrecognizedNote() == "" {
+		t.Error("the scan must be able to say which settings it ignored")
+	}
+}
+
+// The other half: a configuration this build fully understands must not
+// produce a warning, or the warning stops being read.
+func TestAConfigurationThisBuildUnderstandsWarnsAboutNothing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".dragon.yaml")
+	if err := os.WriteFile(path, []byte(`version: dragonguard/v1
+project: example
+accept:
+  - finding: GO-2026-5932
+    reason: unmaintained upstream, no replacement
+    approved_by: the security team
+ships:
+  - .
+supply_chain:
+  min_scorecard: 4.0
+licenses:
+  allow:
+    - id: MPL-2.0
+      reason: consumed unmodified
+      approved_by: the security team
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path, dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Unrecognized) != 0 {
+		t.Errorf("a fully understood configuration reported %v as unrecognized", cfg.Unrecognized)
+	}
+}
+
+// "Every field below is optional except version. This example sets all of
+// them" is a claim the document makes about itself, and it has now been wrong
+// twice -- once when licenses arrived and once when accept, ships and
+// supply_chain did. A reader copying from it cannot tell what it left out.
+//
+// So the claim is checked rather than trusted: every top-level key the loader
+// understands must appear in the example.
+func TestTheDocumentedExampleSetsEveryTopLevelKey(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	if err != nil {
+		t.Fatalf("read the configuration reference: %v", err)
+	}
+	block := yamlBlockAfter(t, string(raw), "## A complete example")
+
+	documented := map[string]bool{}
+	for _, line := range strings.Split(block, "\n") {
+		// Top level only: a key at column zero, commented or not.
+		trimmed := strings.TrimPrefix(line, "# ")
+		if trimmed != line && strings.HasPrefix(line, "# ") {
+			// A commented top-level key still counts as documented; ships: is
+			// shown that way in dragon init for the same reason.
+			line = trimmed
+		}
+		if line == "" || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "#") ||
+			strings.HasPrefix(line, "-") {
+			continue
+		}
+		if k, _, ok := strings.Cut(line, ":"); ok {
+			documented[strings.TrimSpace(k)] = true
+		}
+	}
+
+	typ := reflect.TypeOf(Config{})
+	var missing []string
+	for i := 0; i < typ.NumField(); i++ {
+		tag := typ.Field(i).Tag.Get("yaml")
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		if !documented[name] {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("the complete example claims to set every field but omits: %s",
+			strings.Join(missing, ", "))
 	}
 }

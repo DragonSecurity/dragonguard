@@ -573,6 +573,34 @@ setting a floor.
 A floor guessed in advance is a floor somebody disables in a week. Run a few
 scans first, then set one just below where you actually are, and raise it.
 
+## A setting that does nothing now says so
+
+YAML ignores a key it does not recognise, in silence. For a configuration file
+that is the worst of the available behaviours, and it has two causes that look
+identical from the outside:
+
+- a typo — `licenses.alow`, `acccept`
+- a block copied from the documentation of a **newer release** than the
+  `dragon` binary actually running
+
+In both cases the setting is plainly there in the file, the scan behaves
+exactly as though it were absent, and nothing says which. That is an afternoon
+spent on a block that was discarded at load.
+
+So an unrecognised key is now reported, on a highlighted `config` line:
+
+```
+  !!  config         2 setting(s) this build does not understand were ignored: alow, teleport
+```
+
+**Reported, never refused.** Both causes want the same answer. Refusing would
+mean a config written for a newer DragonGuard cannot run on an older one at
+all, which turns a warning into an outage — and the version skew is exactly
+when you most want the scan to still run.
+
+If a setting you have written is listed there and is not a typo, check
+`dragon version` against the release the setting was added in.
+
 ## Validation, and why it is strict
 
 `asset.environment` and `asset.criticality` are checked against their allowed

@@ -63,6 +63,9 @@ type Result struct {
 	// Ships records whether build-only dependencies could be told apart from
 	// the ones that reach production, and how many there were.
 	Ships ships.Report `json:"ships"`
+	// Unrecognized names configuration keys this build read and did not
+	// understand -- a typo, or a block written for a newer release.
+	Unrecognized []string `json:"unrecognized_config,omitempty"`
 }
 
 // AcceptanceReport summarises what the `accept:` register did to this scan.
@@ -250,6 +253,14 @@ func Text(w io.Writer, r *Result, opts Options) error {
 	}
 	if note := r.Accepted.Note(); note != "" {
 		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "accepted", p.c(dim, note))
+	}
+	if len(r.Unrecognized) > 0 {
+		// Not dim, like the lapsed acceptance. A setting that did nothing is
+		// something to act on, and the whole failure it replaces was one of
+		// not being told.
+		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(yellow, "!!"), "config",
+			p.c(yellow, fmt.Sprintf("%d setting(s) this build does not understand were ignored: %s",
+				len(r.Unrecognized), strings.Join(r.Unrecognized, ", "))))
 	}
 	if note := r.Ships.Note(); note != "" {
 		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "ships", p.c(dim, note))
