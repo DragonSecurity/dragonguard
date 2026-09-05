@@ -517,3 +517,98 @@ func TestAnAcceptanceIsVisibleInTheRuleList(t *testing.T) {
 		t.Errorf("description %q should record who approved it", rules[0].Description)
 	}
 }
+
+// The identifier the report prints is the one somebody copies. A supply-chain
+// finding renders as "next-themes@0.4.6", so an acceptance written as
+// package: next-themes@0.4.6 has to work -- printing a string that looks
+// exactly like an identifier and then refusing it is the tool's fault.
+func TestAPackageSelectorAcceptsTheIdentifierTheReportPrints(t *testing.T) {
+	now := time.Now()
+	e, _ := acceptEngine(t, now, config.Acceptance{
+		Package: "next-themes@0.4.6", Reason: "reviewed", ApprovedBy: "security",
+	})
+
+	match := finding.Finding{
+		Scanner: "supplychain", Category: finding.CategorySupplyChain,
+		RuleID: "supply-chain/weak-upstream", Severity: finding.SeverityInfo,
+		Package: &finding.Package{Ecosystem: "npm", Name: "next-themes", Version: "0.4.6"},
+	}
+	// A version the entry did not name is a different decision: the review was
+	// of what was there, and the bump is worth seeing.
+	bumped := match
+	bumped.Package = &finding.Package{Ecosystem: "npm", Name: "next-themes", Version: "0.5.0"}
+	match.Normalize(now)
+	bumped.Normalize(now)
+
+	got := []finding.Finding{match, bumped}
+	e.EvaluateAll(got, config.Asset{Environment: "production"}, nil)
+	if got[0].Status != finding.StatusAccepted {
+		t.Error("name@version copied from the report should match")
+	}
+	if got[1].Status == finding.StatusAccepted {
+		t.Error("naming a version should not accept every other version of it")
+	}
+}
+
+// Go module versions are printed with a leading v and npm versions without, so
+// whichever form somebody copies has to work.
+func TestAGoModuleVersionMatchesWithOrWithoutTheVPrefix(t *testing.T) {
+	now := time.Now()
+	for _, written := range []string{"github.com/spf13/viper@v1.21.0", "github.com/spf13/viper@1.21.0"} {
+		e, _ := acceptEngine(t, now, config.Acceptance{
+			Package: written, Reason: "reviewed", ApprovedBy: "security",
+		})
+		f := finding.Finding{
+			Scanner: "supplychain", Category: finding.CategorySupplyChain,
+			RuleID: "supply-chain/quiet", Severity: finding.SeverityInfo,
+			Package: &finding.Package{Ecosystem: "go", Name: "github.com/spf13/viper", Version: "v1.21.0"},
+		}
+		f.Normalize(now)
+		got := []finding.Finding{f}
+		e.EvaluateAll(got, config.Asset{Environment: "production"}, nil)
+		if got[0].Status != finding.StatusAccepted {
+			t.Errorf("%q did not match a finding on v1.21.0", written)
+		}
+	}
+}
+
+// An npm scoped package is "@scope/name": splitting on the first "@" rather
+// than the last would produce a selector matching nothing, reintroducing the
+// exact failure this is here to remove, for the packages most likely to be
+// scoped.
+func TestAScopedPackageKeepsItsLeadingAt(t *testing.T) {
+	for _, tc := range []struct{ sel, name, version string }{
+		{"next-themes@0.4.6", "next-themes", "0.4.6"},
+		{"next-themes", "next-themes", ""},
+		{"@scope/pkg@1.0.0", "@scope/pkg", "1.0.0"},
+		{"@scope/pkg", "@scope/pkg", ""},
+		{"github.com/spf13/viper@v1.21.0", "github.com/spf13/viper", "v1.21.0"},
+		{"trailing@", "trailing", ""},
+	} {
+		name, version := splitPackageSelector(tc.sel)
+		if name != tc.name || version != tc.version {
+			t.Errorf("splitPackageSelector(%q) = %q, %q; want %q, %q",
+				tc.sel, name, version, tc.name, tc.version)
+		}
+	}
+}
+
+// A scoped package with no version must still match, which it cannot if the
+// leading "@" is read as a version separator.
+func TestAScopedPackageWithNoVersionStillMatches(t *testing.T) {
+	now := time.Now()
+	e, _ := acceptEngine(t, now, config.Acceptance{
+		Package: "@scope/pkg", Reason: "reviewed", ApprovedBy: "security",
+	})
+	f := finding.Finding{
+		Scanner: "supplychain", Category: finding.CategorySupplyChain,
+		RuleID: "supply-chain/quiet", Severity: finding.SeverityInfo,
+		Package: &finding.Package{Ecosystem: "npm", Name: "@scope/pkg", Version: "1.0.0"},
+	}
+	f.Normalize(now)
+	got := []finding.Finding{f}
+	e.EvaluateAll(got, config.Asset{Environment: "production"}, nil)
+	if got[0].Status != finding.StatusAccepted {
+		t.Error("a scoped package selector with no version should match")
+	}
+}

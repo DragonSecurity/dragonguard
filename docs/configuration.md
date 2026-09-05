@@ -385,7 +385,7 @@ findings it was written for.
 | Field | Matches |
 | --- | --- |
 | `finding` | an advisory id (`GO-2026-5932`, `GHSA-…`), a CVE, or an engine rule id (`supply-chain/weak-upstream`) |
-| `package` | a dependency name (`github.com/spf13/viper`, `@scope/pkg`) |
+| `package` | a dependency, as `name` or as the `name@version` the report prints |
 
 At least one is required. Give both and they must both match, which is how you
 accept one advisory *in one dependency* rather than everywhere it appears.
@@ -393,6 +393,19 @@ accept one advisory *in one dependency* rather than everywhere it appears.
 `finding` matches the rule id **or** any CVE on the finding, because which
 identifier a finding carries depends on the engine that reported it and you
 should not have to know which one ran.
+
+`package` accepts either form, because the report identifies a dependency as
+`next-themes@0.4.6` and that is what anyone writing an acceptance copies:
+
+```yaml
+- package: next-themes            # any version
+- package: next-themes@0.4.6      # that version only
+- package: github.com/spf13/viper@v1.21.0   # the v is optional either way
+```
+
+Naming a version narrows the entry to it, which is usually right — a review was
+of what was there, and the next bump is worth seeing. Omit it to accept the
+dependency however it moves.
 
 ### Which selector to use, and the trap in narrowing
 

@@ -497,6 +497,34 @@ func (e *Engine) LoadLicensePolicy(lp config.LicensePolicy) error {
 	return e.LoadRules("licenses (.dragon.yaml)", raw)
 }
 
+// splitPackageSelector separates "name@version" into its parts, and leaves a
+// bare name alone.
+//
+// The last "@", not the first: an npm scoped package is "@scope/name", so a
+// leading "@" is part of the name and splitting on it would produce a selector
+// matching nothing at all -- the failure this is here to remove, reintroduced
+// for the packages most likely to be scoped.
+func splitPackageSelector(sel string) (name, version string) {
+	i := strings.LastIndex(sel, "@")
+	if i <= 0 {
+		return sel, ""
+	}
+	return sel[:i], sel[i+1:]
+}
+
+// versionMatch accepts a Go module version written either way.
+//
+// The report prints "github.com/spf13/viper@v1.21.0" and npm packages without
+// the prefix, so whichever form somebody copies has to work. Comparing both
+// spellings is cheaper than another silently-unmatched entry.
+func versionMatch(version string) string {
+	alt := strings.TrimPrefix(version, "v")
+	if alt == version {
+		alt = "v" + version
+	}
+	return fmt.Sprintf("(component.version == %q || component.version == %q)", version, alt)
+}
+
 // AcceptRulePrefix marks the compiled form of an acceptance, so a caller can
 // tell which of its own entries actually fired.
 const AcceptRulePrefix = "accept/"
@@ -537,7 +565,16 @@ func (e *Engine) LoadAcceptances(now time.Time, list []config.Acceptance) ([]str
 				"(finding.rule_id == %q || %q in finding.cve)", sel, sel))
 		}
 		if sel := strings.TrimSpace(a.Package); sel != "" {
-			match = append(match, fmt.Sprintf("component.name == %q", sel))
+			// The report identifies a dependency as "next-themes@0.4.6", so
+			// that is what somebody writing an acceptance copies. Matching only
+			// the bare name meant the obvious thing to write silently matched
+			// nothing -- the tool printing a string that looks exactly like an
+			// identifier and then refusing it.
+			name, version := splitPackageSelector(sel)
+			match = append(match, fmt.Sprintf("component.name == %q", name))
+			if version != "" {
+				match = append(match, versionMatch(version))
+			}
 		}
 
 		rules = append(rules, Rule{
