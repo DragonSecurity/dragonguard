@@ -177,3 +177,77 @@ func TestWeakestNamesTheFailingChecks(t *testing.T) {
 		t.Errorf("weakest = %q, named a check that passed", got)
 	}
 }
+
+// The two process conditions overlap by construction -- quiet needs an overall
+// below five, weak needs below four -- so anything under four produced both,
+// and the report carried "otp has been quiet and scores 2.9/10" directly above
+// "otp scores 2.9/10 on OpenSSF Scorecard". Two rows, one fact, and a reader
+// counting rows concludes there are twice as many problems as there are.
+func TestOneFindingPerDependencyNotOnePerRule(t *testing.T) {
+	srv := scorecardServer(t, `{"overallScore": 2.9, "checks": [
+		{"name": "Maintained", "score": 0},
+		{"name": "Fuzzing", "score": 0}
+	]}`)
+	defer srv.Close()
+
+	s := &Scanner{Client: &depsdev.Client{BaseURL: srv.URL, HTTP: srv.Client()}, Concurrency: 1}
+	got, err := s.Scan(context.Background(), scanner.Target{
+		Components: []scanner.PackageNode{{Ecosystem: "go", Name: "github.com/pquerna/otp", Version: "v1.5.0", Direct: true}},
+	})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got) != 1 {
+		for _, f := range got {
+			t.Logf("  %s: %s", f.RuleID, f.Title)
+		}
+		t.Fatalf("got %d findings for one dependency, want 1", len(got))
+	}
+	// Quiet and weak at once: the silence belongs in the same finding rather
+	// than in a second one.
+	if !strings.Contains(got[0].Title, "quiet") {
+		t.Errorf("the finding does not mention the inactivity: %q", got[0].Title)
+	}
+	if !strings.Contains(got[0].Message, "Fuzzing") {
+		t.Errorf("the finding does not name the failing checks: %q", got[0].Message)
+	}
+}
+
+// Weak but actively developed is still worth recording, and must not claim the
+// project has gone quiet when it has not.
+func TestAWeakButActiveProjectIsNotCalledQuiet(t *testing.T) {
+	srv := scorecardServer(t, `{"overallScore": 3.4, "checks": [
+		{"name": "Maintained", "score": 10},
+		{"name": "Branch-Protection", "score": 0}
+	]}`)
+	defer srv.Close()
+
+	s := &Scanner{Client: &depsdev.Client{BaseURL: srv.URL, HTTP: srv.Client()}, Concurrency: 1}
+	got, _ := s.Scan(context.Background(), scanner.Target{
+		Components: []scanner.PackageNode{{Ecosystem: "go", Name: "github.com/go-chi/cors", Version: "v1.2.2", Direct: true}},
+	})
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1", len(got))
+	}
+	if strings.Contains(got[0].Title, "quiet") || strings.Contains(got[0].Message, "No recent commits") {
+		t.Errorf("an actively developed project was described as quiet: %q", got[0].Title)
+	}
+}
+
+// scorecardServer fakes the deps.dev calls ScorecardFor makes: the version
+// lookup that resolves a source repo, then the project holding the scorecard.
+func scorecardServer(t *testing.T, scorecard string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/versions/"):
+			_, _ = w.Write([]byte(`{"isDeprecated": false, "relatedProjects": [
+				{"projectKey": {"id": "github.com/example/pkg"}, "relationType": "SOURCE_REPO"}
+			]}`))
+		case strings.Contains(r.URL.Path, "/projects/"):
+			_, _ = w.Write([]byte(`{"scorecard": ` + scorecard + `}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
