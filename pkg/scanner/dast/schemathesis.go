@@ -100,9 +100,19 @@ func (s *Schemathesis) Scan(ctx context.Context, t scanner.Target) ([]finding.Fi
 	defer cleanup()
 
 	var extra []string
+	// Authentication first, so an engine-specific override in args: can still
+	// have the last word on the same flag.
+	if t.Config != nil {
+		for _, h := range t.Config.DAST.SortedHeaders() {
+			extra = append(extra, "-H", h[0]+": "+h[1])
+		}
+	}
 	if t.Config != nil {
 		if ec, ok := t.Config.Engines["schemathesis"]; ok {
-			extra = ec.Args
+			// Appended, not assigned: args: is an escape hatch alongside the
+			// configured authentication, not a replacement for it. Assigning
+			// would make adding one unrelated flag silently drop every header.
+			extra = append(extra, ec.Args...)
 		}
 	}
 	args, bin, err := s.command(schema, baseURL, report, extra)

@@ -612,3 +612,61 @@ func TestAScopedPackageWithNoVersionStillMatches(t *testing.T) {
 		t.Error("a scoped package selector with no version should match")
 	}
 }
+
+// A rule id accepts every occurrence of that rule. For a DAST finding that is
+// almost never what somebody means: accepting a schema check that is wrong
+// about /auth/login also silences it on /auth/{provider}/callback, and the
+// second endpoint was never reviewed by anyone.
+func TestAFingerprintAcceptsOneFindingAndNotItsRule(t *testing.T) {
+	now := time.Now()
+
+	login := Finding(t, "schemathesis/positive_data_acceptance", "/auth/login")
+	callback := Finding(t, "schemathesis/positive_data_acceptance", "/auth/github/callback")
+	login.Normalize(now)
+	callback.Normalize(now)
+
+	e, _ := acceptEngine(t, now, config.Acceptance{
+		Fingerprint: login.Fingerprint,
+		Reason:      "the lockout returns 429, which the checker does not accept",
+		ApprovedBy:  "security",
+	})
+
+	got := []finding.Finding{login, callback}
+	e.EvaluateAll(got, config.Asset{Environment: "production"}, nil)
+	if got[0].Status != finding.StatusAccepted {
+		t.Error("the reviewed finding should be accepted")
+	}
+	if got[1].Status == finding.StatusAccepted {
+		t.Error("a fingerprint must not accept the other occurrences of its rule")
+	}
+}
+
+// People copy identifiers the way git taught them to. A selector that silently
+// fails on an abbreviation would be the same trap all over again.
+func TestAnAbbreviatedFingerprintStillMatches(t *testing.T) {
+	now := time.Now()
+	f := Finding(t, "schemathesis/negative_data_rejection", "/auth/forgot-password")
+	f.Normalize(now)
+
+	e, _ := acceptEngine(t, now, config.Acceptance{
+		Fingerprint: f.Fingerprint[:8],
+		Reason:      "the format check is stricter than RFC 5321",
+		ApprovedBy:  "security",
+	})
+	got := []finding.Finding{f}
+	e.EvaluateAll(got, config.Asset{Environment: "production"}, nil)
+	if got[0].Status != finding.StatusAccepted {
+		t.Errorf("an abbreviated fingerprint %q did not match %q", f.Fingerprint[:8], f.Fingerprint)
+	}
+}
+
+// Finding builds a DAST finding at a URL, which is what makes two occurrences
+// of one rule distinguishable.
+func Finding(t *testing.T, rule, path string) finding.Finding {
+	t.Helper()
+	return finding.Finding{
+		Scanner: "schemathesis", Category: finding.CategoryDAST,
+		RuleID: rule, Title: rule, Severity: finding.SeverityMedium,
+		Location: finding.Location{File: "http://api.test" + path},
+	}
+}

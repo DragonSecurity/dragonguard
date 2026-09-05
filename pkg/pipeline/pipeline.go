@@ -402,16 +402,19 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 		Ignored:       ignoreReport,
 		Excluded:      excludedReport,
 		Unrecognized:  cfg.Unrecognized,
-		Accepted:      acceptReport,
-		Components:    components,
-		Ships:         shipsReport,
-		Scorecard:     sc,
-		Decision:      decision,
-		Findings:      findings,
-		Evaluations:   evaluations,
-		Engines:       engineResults,
-		Enrichment:    enrichReport,
-		Fixed:         fixed,
+		// Names only: the values are credentials and this struct is
+		// serialized into artifacts people share.
+		DASTAuthHeaders: dastHeaderNames(cfg),
+		Accepted:        acceptReport,
+		Components:      components,
+		Ships:           shipsReport,
+		Scorecard:       sc,
+		Decision:        decision,
+		Findings:        findings,
+		Evaluations:     evaluations,
+		Engines:         engineResults,
+		Enrichment:      enrichReport,
+		Fixed:           fixed,
 	}, nil
 }
 
@@ -619,6 +622,19 @@ func unmatchedAcceptances(cfg *config.Config, expired []string, evals []policy.E
 			continue
 		}
 		out = append(out, a.Label())
+	}
+	return out
+}
+
+// dastHeaderNames lists the configured DAST header names, never their values.
+func dastHeaderNames(cfg *config.Config) []string {
+	hs := cfg.DAST.SortedHeaders()
+	if len(hs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(hs))
+	for _, h := range hs {
+		out = append(out, h[0])
 	}
 	return out
 }

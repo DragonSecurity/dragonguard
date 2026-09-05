@@ -525,6 +525,10 @@ func versionMatch(version string) string {
 	return fmt.Sprintf("(component.version == %q || component.version == %q)", version, alt)
 }
 
+// fingerprintLen is the width ComputeFingerprint produces. A selector at least
+// this long is compared exactly; anything shorter is treated as an abbreviation.
+const fingerprintLen = 32
+
 // AcceptRulePrefix marks the compiled form of an acceptance, so a caller can
 // tell which of its own entries actually fired.
 const AcceptRulePrefix = "accept/"
@@ -563,6 +567,17 @@ func (e *Engine) LoadAcceptances(now time.Time, list []config.Acceptance) ([]str
 			// so match either place rather than making the author know.
 			match = append(match, fmt.Sprintf(
 				"(finding.rule_id == %q || %q in finding.cve)", sel, sel))
+		}
+		if sel := strings.TrimSpace(a.Fingerprint); sel != "" {
+			// Exact when a whole fingerprint is given, prefix when it is
+			// abbreviated -- people copy identifiers the way git taught them
+			// to, and a selector that silently fails on a short one is the
+			// trap this is here to remove rather than repeat.
+			if len(sel) >= fingerprintLen {
+				match = append(match, fmt.Sprintf("finding.fingerprint == %q", sel))
+			} else {
+				match = append(match, fmt.Sprintf("finding.fingerprint.startsWith(%q)", sel))
+			}
 		}
 		if sel := strings.TrimSpace(a.Package); sel != "" {
 			// The report identifies a dependency as "next-themes@0.4.6", so
@@ -625,20 +640,24 @@ func activationFor(f *finding.Finding, asset config.Asset, scan map[string]any) 
 
 	return map[string]any{
 		"finding": map[string]any{
-			"id":        f.ID,
-			"category":  string(f.Category),
-			"rule_id":   f.RuleID,
-			"title":     f.Title,
-			"severity":  string(f.Severity),
-			"scanner":   f.Scanner,
-			"file":      f.Location.File,
-			"line":      int64(f.Location.StartLine),
-			"cve":       toStrList(f.CVE),
-			"cwe":       toStrList(f.CWE),
-			"new":       f.New,
-			"status":    string(f.Status),
-			"dimension": f.Category.Dimension(),
-			"tags":      toStrList(f.PolicyTags),
+			"id": f.ID,
+			// Separate from id, which a control plane may reassign. The
+			// fingerprint is the finding's identity across scans and is the
+			// only thing that names one occurrence rather than a whole rule.
+			"fingerprint": f.Fingerprint,
+			"category":    string(f.Category),
+			"rule_id":     f.RuleID,
+			"title":       f.Title,
+			"severity":    string(f.Severity),
+			"scanner":     f.Scanner,
+			"file":        f.Location.File,
+			"line":        int64(f.Location.StartLine),
+			"cve":         toStrList(f.CVE),
+			"cwe":         toStrList(f.CWE),
+			"new":         f.New,
+			"status":      string(f.Status),
+			"dimension":   f.Category.Dimension(),
+			"tags":        toStrList(f.PolicyTags),
 			// Always present, empty for findings that are not about a licence.
 			// The name lived only in Metadata, which policy cannot see, so the
 			// only way to write a rule about MPL-2.0 was to match the rule_id

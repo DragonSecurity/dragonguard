@@ -113,6 +113,10 @@ func TestEngineEnabledDefaultsToTrue(t *testing.T) {
 // real loader, so a field that gets renamed, removed or newly validated fails
 // here rather than in the first user's terminal.
 func TestDocumentedExampleConfigStillLoads(t *testing.T) {
+	// The example shows a credential arriving from the environment, which is
+	// the only way one should ever reach a committed file.
+	t.Setenv("DAST_TOKEN", "example-token")
+
 	md, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
 	if err != nil {
 		t.Fatalf("read the configuration reference: %v", err)
@@ -248,6 +252,8 @@ func TestALicenceCannotBeBothAllowedAndDenied(t *testing.T) {
 // Documentation that is not executed is documentation that is eventually
 // wrong, so the reference's own example is loaded here as a config.
 func TestTheDocumentedExampleIsAValidConfig(t *testing.T) {
+	t.Setenv("DAST_TOKEN", "example-token")
+
 	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
 	if err != nil {
 		t.Fatalf("read the configuration reference: %v", err)
@@ -290,6 +296,9 @@ func TestTheDocumentedExampleIsAValidConfig(t *testing.T) {
 	}
 	if len(cfg.Accept) == 0 || cfg.Accept[0].ApprovedBy == "" {
 		t.Error("accept in the example did not reach Config.Accept")
+	}
+	if got := cfg.DAST.Headers["Authorization"]; got != "Bearer example-token" {
+		t.Errorf("dast in the example did not reach Config.DAST interpolated; got %q", got)
 	}
 	if len(cfg.Ships) == 0 {
 		t.Error("ships in the example did not reach Config.Ships")
@@ -482,5 +491,64 @@ func TestTheDocumentedExampleSetsEveryTopLevelKey(t *testing.T) {
 	if len(missing) > 0 {
 		t.Errorf("the complete example claims to set every field but omits: %s",
 			strings.Join(missing, ", "))
+	}
+}
+
+// A header value carrying a newline is request splitting: everything after it
+// becomes another header, or another request, in whichever engine is least
+// careful. Values are interpolated from the environment, so this is not
+// hypothetical input.
+func TestADASTHeaderCannotSmuggleANewline(t *testing.T) {
+	bad := DASTPolicy{Headers: map[string]string{
+		"Authorization": "Bearer x\r\nX-Injected: yes",
+	}}
+	if err := bad.validate(); err == nil {
+		t.Error("a newline in a header value was accepted")
+	}
+
+	if err := (DASTPolicy{Headers: map[string]string{"Bad Name": "x"}}).validate(); err == nil {
+		t.Error("a space in a header name was accepted")
+	}
+
+	// Empty is almost always an unset ${VAR:-} nobody meant to leave empty,
+	// and sending "Authorization: " looks authenticated and is not.
+	if err := (DASTPolicy{Headers: map[string]string{"Authorization": "  "}}).validate(); err == nil {
+		t.Error("an empty header value was accepted")
+	}
+
+	ok := DASTPolicy{Headers: map[string]string{"Authorization": "Bearer abc", "X-Tenant": "acme"}}
+	if err := ok.validate(); err != nil {
+		t.Errorf("a valid header set was refused: %v", err)
+	}
+	if got := ok.SortedHeaders(); len(got) != 2 || got[0][0] != "Authorization" {
+		t.Errorf("headers should come back in a stable order; got %v", got)
+	}
+}
+
+// An abbreviation short enough to collide stops naming one finding and starts
+// matching whatever shares those digits, silencing findings nobody decided
+// about.
+func TestAFingerprintSelectorMustBeLongEnoughToMeanSomething(t *testing.T) {
+	base := Acceptance{Reason: "x", ApprovedBy: "y"}
+
+	tooShort := base
+	tooShort.Fingerprint = "09c9"
+	if err := validateAcceptances([]Acceptance{tooShort}); err == nil {
+		t.Error("a four-character fingerprint was accepted")
+	}
+
+	notHex := base
+	notHex.Fingerprint = "zzzzzzzzzz"
+	if err := validateAcceptances([]Acceptance{notHex}); err == nil {
+		t.Error("a non-hexadecimal fingerprint was accepted")
+	}
+
+	ok := base
+	ok.Fingerprint = "09c9d574"
+	if err := validateAcceptances([]Acceptance{ok}); err != nil {
+		t.Errorf("an eight-character fingerprint was refused: %v", err)
+	}
+	if got := ok.Label(); got != "fingerprint 09c9d574" {
+		t.Errorf("Label() = %q; a fingerprint-only entry needs a readable name", got)
 	}
 }

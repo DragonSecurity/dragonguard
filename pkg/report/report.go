@@ -66,6 +66,16 @@ type Result struct {
 	// Unrecognized names configuration keys this build read and did not
 	// understand -- a typo, or a block written for a newer release.
 	Unrecognized []string `json:"unrecognized_config,omitempty"`
+	// DASTAuthHeaders names the headers the dynamic engines were given.
+	//
+	// Names only. The values are credentials, and a report is a file that gets
+	// attached to tickets, uploaded as a CI artifact and pasted into chat.
+	//
+	// Reported at all because the difference between an authenticated scan and
+	// an unauthenticated one is most of the findings, and nothing else on
+	// screen distinguishes them: an unauthenticated run of an authenticated
+	// API finds the login wall and calls it clean.
+	DASTAuthHeaders []string `json:"dast_auth_headers,omitempty"`
 }
 
 // AcceptanceReport summarises what the `accept:` register did to this scan.
@@ -280,6 +290,11 @@ func Text(w io.Writer, r *Result, opts Options) error {
 		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(yellow, "!!"), "config",
 			p.c(yellow, fmt.Sprintf("%d setting(s) this build does not understand were ignored: %s",
 				len(r.Unrecognized), strings.Join(r.Unrecognized, ", "))))
+	}
+	if len(r.DASTAuthHeaders) > 0 {
+		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "dast auth",
+			p.c(dim, fmt.Sprintf("%d header(s) sent with every request: %s",
+				len(r.DASTAuthHeaders), strings.Join(r.DASTAuthHeaders, ", "))))
 	}
 	if note := r.Ships.Note(); note != "" {
 		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "ships", p.c(dim, note))
