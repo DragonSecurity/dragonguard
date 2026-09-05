@@ -151,6 +151,17 @@ engines:
   gitleaks:
     enabled: true
 
+# Go alone does not record which dependencies are build-only: a
+# code-generation tool sits in the same go.mod as the driver the server opens
+# at startup. Name what this project actually ships and the toolchain works out
+# the rest -- everything outside the closure of these packages is build-only.
+#
+# Leave it out and the scan says the question is unanswered, rather than
+# reporting that every dependency reaches production.
+# ships:
+#   - .
+#   - ./cmd/...
+
 policies:
   - policies
 

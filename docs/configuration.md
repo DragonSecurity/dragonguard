@@ -82,6 +82,9 @@ engines:
       - https://staging.example.com/api/v1/openapi.json   # the schema
       - https://staging.example.com/api/v1                # the base URL
 
+  supplychain:
+    enabled: true                     # no binary; it queries deps.dev
+
 # ---------------------------------------------------------------------------
 # Policy packs: files or directories. Relative paths resolve against this
 # file's directory, and a directory is read recursively.
@@ -201,6 +204,7 @@ produces something that parses and is wrong.
 | `schemathesis` | `[schema, base-url]` | **Two** entries, in that order. |
 | `trivy` | *unused* | Configure it through `args`. |
 | `gitleaks` | *unused* | Configure it through `args`. |
+| `supplychain` | *unused* | Tuned through the top-level `supply_chain:` block. |
 
 The two-entry requirement for `schemathesis` is the common mistake, because
 `zap` next to it takes a single URL and the same shape reads as complete.
@@ -211,12 +215,21 @@ Neither DAST engine will ever guess a target. Inferring one means sending
 traffic somewhere nobody authorised, and doing that on a `production` asset is
 worse than not scanning.
 
-Both DAST engines fall back to their official container when the CLI is not on
+Both DAST engines fall back to their official container when no CLI is on
 `PATH` — `ghcr.io/zaproxy/zaproxy:stable` and `schemathesis/schemathesis:stable`
-— so `docker` alone is enough to make them available. The other four engines
-are `PATH`-only; see the README for why. One consequence: `localhost` inside a
-container is the container, so a target pointing at a service on your own host
-will not resolve through the fallback.
+— so `docker` alone is enough to make them available. Schemathesis is looked up
+under **both** the names it installs as, `schemathesis` and `st`; finding
+either one skips the container.
+
+One consequence of the fallback: `localhost` inside a container is the
+container, so a target pointing at a service on your own host will not resolve
+through it.
+
+Of the remaining five engines, four are `PATH`-only — `trivy`, `opengrep`,
+`gitleaks`, `osv` — and see the README for why. `supplychain` needs no binary at
+all: it reads the inventory the others resolved and asks deps.dev about the
+projects behind it, so what makes it unavailable is `offline: true`, or a scan
+where nothing resolved an inventory for it to assess.
 
 ## `enabled` and the shape of an engine block
 
