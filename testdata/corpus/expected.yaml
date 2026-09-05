@@ -39,9 +39,10 @@ detections:
   # bare access key ID, correctly -- an ID identifies, it does not authenticate.
   # Trivy flags both halves. Asserting each separately is what would catch
   # either engine quietly narrowing.
-  - {scanner: gitleaks, rule: generic-api-key,       file: secrets/config.env}
-  - {scanner: trivy,    rule: aws-access-key-id,     file: secrets/config.env}
-  - {scanner: trivy,    rule: aws-secret-access-key, file: secrets/config.env}
+  - {scanner: gitleaks, rule: github-pat,             file: secrets/config.env}
+  - {scanner: gitleaks, rule: slack-legacy-bot-token, file: secrets/config.env}
+  - {scanner: trivy,    rule: github-pat,             file: secrets/config.env}
+  - {scanner: trivy,    rule: slack-access-token,     file: secrets/config.env}
 
 # SCA is asserted by PACKAGE, never by CVE.
 #
