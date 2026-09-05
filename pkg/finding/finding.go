@@ -334,8 +334,22 @@ func (f *Finding) ComputeFingerprint() string {
 		sort.Strings(cves)
 		parts = append(parts, strings.Join(cves, ","))
 		if len(cves) == 0 {
-			// Without a CVE there is nothing scanner-independent to key on.
-			parts = append(parts, f.Scanner, f.RuleID)
+			// A CVE is not the only scanner-independent name an advisory has.
+			// GO-2026-5932, GHSA-…, RUSTSEC-… and the distro advisories are
+			// issued by the database rather than by the tool that read it, so
+			// two engines reporting one of them are reporting one problem.
+			//
+			// Treating them as scanner-specific produced exactly that: OSV and
+			// Trivy both reported GO-2026-5932 against golang.org/x/crypto and
+			// the report carried it twice, which doubles the apparent backlog
+			// and makes the tool look like it cannot count.
+			if id := advisoryID(f.RuleID); id != "" {
+				parts = append(parts, id)
+			} else {
+				// A genuinely engine-specific rule. Its meaning depends on the
+				// engine that defined it, so the engine stays in the identity.
+				parts = append(parts, f.Scanner, f.RuleID)
+			}
 		}
 
 	case CategorySecret:
@@ -441,6 +455,40 @@ func (f *Finding) LocationRef() string {
 // fingerprint uses this form -- reports still show whatever the scanner
 // actually said, because rewriting a version we were told is a good way to
 // make a report disagree with the lockfile it came from.
+// advisoryPrefixes are the advisory databases whose identifiers name a
+// vulnerability rather than a tool's opinion of one.
+//
+// Deliberately a list rather than a pattern. "Looks like an identifier" would
+// also match an engine's own rule naming scheme, and merging two engines'
+// distinct rules because their ids rhyme is a worse failure than showing one
+// advisory twice: it hides a finding rather than duplicating one.
+var advisoryPrefixes = []string{
+	"GHSA-",    // GitHub Security Advisories
+	"GO-",      // Go vulnerability database
+	"OSV-",     // OSV
+	"PYSEC-",   // Python
+	"RUSTSEC-", // Rust
+	"GMS-",     // GitLab
+	"DSA-",     // Debian
+	"DLA-",     // Debian LTS
+	"RHSA-",    // Red Hat
+	"USN-",     // Ubuntu
+	"ALAS-",    // Amazon Linux
+	"ELSA-",    // Oracle Linux
+}
+
+// advisoryID returns the rule id when it names an advisory that any engine
+// could have reported, and empty when the rule belongs to one engine.
+func advisoryID(ruleID string) string {
+	id := strings.ToUpper(strings.TrimSpace(ruleID))
+	for _, p := range advisoryPrefixes {
+		if strings.HasPrefix(id, p) {
+			return id
+		}
+	}
+	return ""
+}
+
 func canonicalVersion(v string) string {
 	v = strings.TrimSpace(v)
 	if len(v) > 1 && (v[0] == 'v' || v[0] == 'V') && v[1] >= '0' && v[1] <= '9' {
