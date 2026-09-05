@@ -337,3 +337,74 @@ func TestDependencyIdentityIsUnchangedByTheSiteDiscriminator(t *testing.T) {
 		t.Error("a dependency finding's identity changed with its snippet")
 	}
 }
+
+// The duplicate that started this: OSV and Trivy both read the Go
+// vulnerability database, both reported GO-2026-5932 against
+// golang.org/x/crypto, and the report carried it twice. Neither carried a CVE,
+// so the fingerprint fell back to the scanner name and the two engines agreeing
+// looked like two problems.
+func TestOneAdvisoryFromTwoEnginesIsOneFinding(t *testing.T) {
+	now := time.Now()
+	osv := Finding{
+		Scanner: "osv", Category: CategorySCA, RuleID: "GO-2026-5932",
+		Title:    "The golang.org/x/crypto/openpgp package is unmaintained",
+		Severity: SeverityMedium,
+		Package:  &Package{Ecosystem: "go", Name: "golang.org/x/crypto", Version: "0.56.0"},
+	}
+	trivy := Finding{
+		Scanner: "trivy", Category: CategorySCA, RuleID: "GO-2026-5932",
+		Title:    "openpgp is unmaintained",
+		Severity: SeverityLow,
+		Package:  &Package{Ecosystem: "gomod", Name: "golang.org/x/crypto", Version: "v0.56.0"},
+	}
+	osv.Normalize(now)
+	trivy.Normalize(now)
+
+	if osv.Fingerprint != trivy.Fingerprint {
+		t.Errorf("two engines reporting %s on the same package produced two findings:\n  osv   %s\n  trivy %s",
+			osv.RuleID, osv.Fingerprint, trivy.Fingerprint)
+	}
+}
+
+// The other direction, which is what keeps the merge honest. An engine's own
+// rule id means whatever that engine decided it means, so two engines using the
+// same string are not necessarily talking about the same thing. Merging those
+// would hide a finding, which is worse than showing one twice.
+func TestAnEngineSpecificRuleKeepsItsEngineInItsIdentity(t *testing.T) {
+	now := time.Now()
+	a := Finding{
+		Scanner: "trivy", Category: CategorySCA, RuleID: "unmaintained-package",
+		Title: "unmaintained", Severity: SeverityLow,
+		Package: &Package{Ecosystem: "go", Name: "example.com/x", Version: "1.0.0"},
+	}
+	b := a
+	b.Scanner = "osv"
+	a.Normalize(now)
+	b.Normalize(now)
+
+	if a.Fingerprint == b.Fingerprint {
+		t.Error("a rule id that is not an advisory identifier must stay scoped to the engine that defined it")
+	}
+}
+
+func TestAdvisoryIDRecognisesTheDatabasesAndNothingElse(t *testing.T) {
+	for _, id := range []string{
+		"GO-2026-5932", "GHSA-xxxx-yyyy-zzzz", "OSV-2021-1", "PYSEC-2023-1",
+		"RUSTSEC-2020-0001", "DSA-5555-1", "USN-1234-1", "ghsa-lower-case-id",
+	} {
+		if advisoryID(id) == "" {
+			t.Errorf("advisoryID(%q) = \"\", want it recognised as an advisory", id)
+		}
+	}
+	for _, id := range []string{
+		"", "unmaintained-package", "go.lang.security.audit.sqli",
+		"generic-api-key", "DS002", "supply-chain/quiet",
+		// Near misses. An engine rule that merely starts with a letter pair
+		// must not be mistaken for a database identifier.
+		"GOSEC-G401", "GOLANG-STYLE-RULE",
+	} {
+		if got := advisoryID(id); got != "" {
+			t.Errorf("advisoryID(%q) = %q, want it treated as engine-specific", id, got)
+		}
+	}
+}
