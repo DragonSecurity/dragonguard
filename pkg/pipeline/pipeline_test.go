@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DragonSecurity/dragonguard/pkg/baseline"
@@ -521,5 +522,80 @@ func TestDeclaringWhatShipsMarksTheRestBuildOnly(t *testing.T) {
 	if byRule["GHSA-tool"].RiskScore >= byRule["GHSA-prod"].RiskScore {
 		t.Errorf("build-only scored %.0f against shipped %.0f; knowing should change the risk",
 			byRule["GHSA-tool"].RiskScore, byRule["GHSA-prod"].RiskScore)
+	}
+}
+
+// An acceptance whose selector is subtly wrong is worse than no acceptance:
+// somebody has written down a decision, believes it is in effect, and it is
+// not. The rule id is the easy thing to get wrong, because the report shows a
+// finding's title and not its rule -- a supply-chain finding reading "viper has
+// been quiet and scores 4.5/10" is supply-chain/quiet, not
+// supply-chain/weak-upstream, and nothing on screen says so.
+func TestAnAcceptanceThatMatchedNothingIsNamed(t *testing.T) {
+	dir := t.TempDir()
+	quiet := finding.Finding{
+		Scanner: "supplychain", Category: finding.CategorySupplyChain,
+		RuleID: "supply-chain/quiet", Title: "viper has been quiet",
+		Severity: finding.SeverityInfo,
+		Package:  &finding.Package{Ecosystem: "go", Name: "github.com/spf13/viper", Version: "v1.21.0"},
+	}
+	cfg := testConfig(t, dir, config.Asset{Name: "t", Environment: "production", Criticality: "medium"})
+	cfg.Accept = []config.Acceptance{
+		{
+			// The right package, the wrong rule.
+			Package: "github.com/spf13/viper", Finding: "supply-chain/weak-upstream",
+			Reason: "reviewed", ApprovedBy: "security",
+		},
+		{
+			// The one that does match.
+			Package: "github.com/spf13/viper", Finding: "supply-chain/quiet",
+			Reason: "reviewed", ApprovedBy: "security",
+		},
+	}
+
+	res, err := Run(context.Background(), Options{
+		Dir: dir, Config: cfg, Offline: true,
+		Registry: regWith(&fakeScanner{name: "supplychain", available: true,
+			cats: []finding.Category{finding.CategorySupplyChain}, findings: []finding.Finding{quiet}}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.Accepted.Applied != 1 {
+		t.Errorf("applied = %d, want the matching acceptance to have fired", res.Accepted.Applied)
+	}
+	if len(res.Accepted.Unmatched) != 1 {
+		t.Fatalf("unmatched = %v, want exactly the wrong-rule entry", res.Accepted.Unmatched)
+	}
+	if !strings.Contains(res.Accepted.Unmatched[0], "weak-upstream") {
+		t.Errorf("unmatched names %q; it should name the entry that did nothing", res.Accepted.Unmatched[0])
+	}
+	if res.Accepted.UnmatchedNote() == "" {
+		t.Error("the scan must be able to say an acceptance matched nothing")
+	}
+}
+
+// An expired entry matches nothing by construction, and already has its own,
+// more specific line. Reporting it twice would train people to skim both.
+func TestAnExpiredAcceptanceIsNotAlsoReportedAsUnmatched(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(t, dir, config.Asset{Name: "t"})
+	cfg.Accept = []config.Acceptance{{
+		Finding: "GO-1", Reason: "waiting on upstream", ApprovedBy: "security",
+		Expires: "2020-01-01",
+	}}
+
+	res, err := Run(context.Background(), Options{
+		Dir: dir, Config: cfg, Offline: true, Registry: scanner.NewRegistry(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Accepted.Expired) != 1 {
+		t.Fatalf("expired = %v", res.Accepted.Expired)
+	}
+	if len(res.Accepted.Unmatched) != 0 {
+		t.Errorf("an expired acceptance was also reported as unmatched: %v", res.Accepted.Unmatched)
 	}
 }
