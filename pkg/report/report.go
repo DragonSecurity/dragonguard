@@ -15,6 +15,7 @@ import (
 	"github.com/DragonSecurity/dragonguard/pkg/policy"
 	"github.com/DragonSecurity/dragonguard/pkg/scanner"
 	"github.com/DragonSecurity/dragonguard/pkg/scorecard"
+	"github.com/DragonSecurity/dragonguard/pkg/ships"
 	"github.com/DragonSecurity/dragonguard/pkg/vcs"
 )
 
@@ -59,6 +60,9 @@ type Result struct {
 	// Accepted records the standing exceptions the acceptance register applied,
 	// and the ones that have run out.
 	Accepted AcceptanceReport `json:"accepted"`
+	// Ships records whether build-only dependencies could be told apart from
+	// the ones that reach production, and how many there were.
+	Ships ships.Report `json:"ships"`
 }
 
 // AcceptanceReport summarises what the `accept:` register did to this scan.
@@ -246,6 +250,9 @@ func Text(w io.Writer, r *Result, opts Options) error {
 	}
 	if note := r.Accepted.Note(); note != "" {
 		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "accepted", p.c(dim, note))
+	}
+	if note := r.Ships.Note(); note != "" {
+		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "ships", p.c(dim, note))
 	}
 	if note := r.Accepted.ExpiredNote(); note != "" {
 		// Not dim. An expiry that passed is a decision that needs remaking, and

@@ -16,8 +16,8 @@ them, uncommented and at the indentation they actually take, so there is one
 place to see both what exists and where it goes; a real config is much shorter.
 
 The top-level keys are `version`, `project`, `asset`, `engines`, `policies`,
-`baseline`, `default_branch`, `licenses`, `accept`, `supply_chain`, `ignore`,
-`state_dir`, and the switches at the end. Anything not in that list belongs
+`baseline`, `default_branch`, `licenses`, `accept`, `ships`, `supply_chain`,
+`ignore`, `state_dir`, and the switches at the end. Anything not in that list belongs
 inside one of them.
 
 ```yaml
@@ -133,6 +133,14 @@ accept:
     reason: Reviewed 2026-09; Scorecard measures process, not this library's risk.
     approved_by: the security team
     expires: 2027-03-01
+
+# The packages this project actually ships, as `go list` patterns. Go is the
+# only ecosystem that does not record which dependencies are build-only, so
+# naming the entry points is what lets the toolchain work it out. See "Which
+# Go dependencies actually ship" below.
+ships:
+  - .
+  - ./cmd/...
 
 # Where the upstream-posture engine draws its lines. These are the defaults;
 # see "Tuning the supply-chain engine" below.
@@ -399,6 +407,61 @@ would know is a posture drop with no cause.
 Acceptances are desugared into ordinary policy rules like `licenses:`, so
 `approved_by` shows up as the rule's description and the whole register stays
 auditable rather than becoming a second hidden mechanism.
+
+## Which Go dependencies actually ship
+
+npm has `dependencies` and `devDependencies`. Python has extras and dev groups.
+Go has `require`, and nothing else: the code-generation tool imported by a
+package under `tools/` sits in the same list as the database driver the server
+opens at startup.
+
+The problem was not that the information was missing. It was that its absence
+was reported as a fact — every Go dependency arrived with `dev_only: false`,
+which is a claim, not a gap. The built-in policy rule written for exactly this
+case could therefore never fire:
+
+```
+accept-dev-only-medium-risk        allow
+  when: ((component.dev_only) && (risk.score < 75))
+```
+
+And a service was scored for the whole GCP and Spanner tree that reaches it
+only through a schema-generation tool it does not link.
+
+The toolchain can answer this exactly, given the one thing only the project
+knows — what it ships:
+
+```yaml
+ships:
+  - .
+  - ./cmd/...
+```
+
+Ordinary `go list` patterns. Everything outside the closure of those packages
+is build-only *by construction*: this is the same graph the linker walks, not a
+guess about directory names. On a mid-sized service it typically moves a third
+to a half of the module list out of production scope.
+
+`ships:` also decides the other direction. Name `./tools/...` there and its
+dependencies are shipped, because the list says what this project ships rather
+than encoding an opinion about what a directory called `tools` means.
+
+### When it cannot be determined
+
+Leave `ships:` unset and the scan says so, on a `ships` line in the evidence
+block, instead of continuing to assert that everything reaches production. The
+same line reports a `go list` that failed — a pattern matching no packages is an
+error rather than an empty closure, because a typo that silently marked every
+dependency build-only would take the dependency dimension with it.
+
+Nothing is guessed when it is unset: findings keep the behaviour they had
+before, and the rule above stays inert. The difference is that you can now see
+that it is.
+
+An offline scan runs `go list` with `GOPROXY=off`. If the module cache is
+incomplete it fails and reports undetermined, which is the right outcome: a
+closure computed from half a module cache would mark real dependencies
+build-only, and that is the one mistake this must not make.
 
 ## Tuning the supply-chain engine
 

@@ -36,6 +36,21 @@ func (f *fakeScanner) Scan(context.Context, scanner.Target) ([]finding.Finding, 
 	return f.findings, f.err
 }
 
+// fakeGraphScanner also reports an inventory, which is what the ships pass and
+// the upstream-posture engine both read.
+type fakeGraphScanner struct {
+	fakeScanner
+	nodes []scanner.PackageNode
+}
+
+func (f *fakeGraphScanner) ScanWithGraph(context.Context, scanner.Target) ([]finding.Finding, *scanner.PackageGraph, error) {
+	g := scanner.NewPackageGraph()
+	for _, n := range f.nodes {
+		g.Add(n)
+	}
+	return f.findings, g, f.err
+}
+
 func testConfig(t *testing.T, dir string, asset config.Asset) *config.Config {
 	t.Helper()
 	c := config.Default()
@@ -375,5 +390,136 @@ func TestAnExpiredAcceptanceIsReportedRatherThanDroppedQuietly(t *testing.T) {
 	}
 	if res.Accepted.ExpiredNote() == "" {
 		t.Error("the scan must be able to say an acceptance lapsed")
+	}
+}
+
+// Go records nothing about build-only dependencies, so before ships: the answer
+// was an unqualified "everything reaches production" -- a claim rather than a
+// gap. The scan has to be able to tell the two apart.
+func TestGoDependenciesReportWhetherBuildOnlyIsKnown(t *testing.T) {
+	dir := t.TempDir()
+	goDep := finding.Finding{
+		Scanner: "trivy", Category: finding.CategorySCA, RuleID: "GHSA-1",
+		Severity: finding.SeverityMedium,
+		Package:  &finding.Package{Ecosystem: "go", Name: "example.com/tool", Version: "v1.0.0"},
+	}
+	reg := regWith(&fakeGraphScanner{
+		fakeScanner: fakeScanner{name: "trivy", available: true,
+			cats: []finding.Category{finding.CategorySCA}, findings: []finding.Finding{goDep}},
+		nodes: []scanner.PackageNode{
+			{Ecosystem: "go", Name: "example.com/tool", Version: "v1.0.0", Direct: true},
+		},
+	})
+
+	res, err := Run(context.Background(), Options{
+		Dir: dir, Registry: reg, Offline: true,
+		Config: testConfig(t, dir, config.Asset{Name: "t", Environment: "production", Criticality: "medium"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ships.Determined {
+		t.Error("with no ships: configured, build-only cannot be determined")
+	}
+	if res.Ships.Note() == "" {
+		t.Error("an undetermined result must be reported, not left to look clean")
+	}
+}
+
+// A project with no Go dependencies should hear nothing about Go entry points.
+func TestNoGoDependenciesMeansNothingToSayAboutShipping(t *testing.T) {
+	dir := t.TempDir()
+	reg := regWith(&fakeGraphScanner{
+		fakeScanner: fakeScanner{name: "trivy", available: true,
+			cats: []finding.Category{finding.CategorySCA}},
+		nodes: []scanner.PackageNode{
+			{Ecosystem: "npm", Name: "left-pad", Version: "1.0.0", Direct: true},
+		},
+	})
+
+	res, err := Run(context.Background(), Options{
+		Dir: dir, Registry: reg, Offline: true,
+		Config: testConfig(t, dir, config.Asset{Name: "t"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ships.Note() != "" {
+		t.Errorf("a project with no Go dependencies said %q", res.Ships.Note())
+	}
+}
+
+// The payoff, end to end: a module reachable only from a tool stops being
+// scored as though the server links it, which is what makes the built-in
+// build-only policy rule able to fire at all.
+func TestDeclaringWhatShipsMarksTheRestBuildOnly(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module example.com/app\n\ngo 1.21\n\nrequire (\n\texample.com/prod v0.0.0\n\texample.com/tool v0.0.0\n)\n\nreplace example.com/prod => ./deps/prod\n\nreplace example.com/tool => ./deps/tool\n")
+	write("main.go", "package main\n\nimport \"example.com/prod\"\n\nfunc main() { _ = prod.X }\n")
+	write("tools/gen/main.go", "package main\n\nimport \"example.com/tool\"\n\nfunc main() { _ = tool.Y }\n")
+	write("deps/prod/go.mod", "module example.com/prod\n\ngo 1.21\n")
+	write("deps/prod/prod.go", "package prod\n\nconst X = 1\n")
+	write("deps/tool/go.mod", "module example.com/tool\n\ngo 1.21\n")
+	write("deps/tool/tool.go", "package tool\n\nconst Y = 2\n")
+	t.Setenv("GOWORK", "off")
+	t.Setenv("GOFLAGS", "")
+
+	onTool := finding.Finding{
+		Scanner: "trivy", Category: finding.CategorySCA, RuleID: "GHSA-tool",
+		Severity: finding.SeverityMedium,
+		Package:  &finding.Package{Ecosystem: "go", Name: "example.com/tool", Version: "v0.0.0"},
+	}
+	onProd := finding.Finding{
+		Scanner: "trivy", Category: finding.CategorySCA, RuleID: "GHSA-prod",
+		Severity: finding.SeverityMedium,
+		Package:  &finding.Package{Ecosystem: "go", Name: "example.com/prod", Version: "v0.0.0"},
+	}
+	reg := regWith(&fakeGraphScanner{
+		fakeScanner: fakeScanner{name: "trivy", available: true,
+			cats: []finding.Category{finding.CategorySCA}, findings: []finding.Finding{onTool, onProd}},
+		nodes: []scanner.PackageNode{
+			{Ecosystem: "go", Name: "example.com/tool", Version: "v0.0.0", Direct: true},
+			{Ecosystem: "go", Name: "example.com/prod", Version: "v0.0.0", Direct: true},
+		},
+	})
+
+	cfg := testConfig(t, dir, config.Asset{Name: "t", Environment: "production", Criticality: "medium"})
+	cfg.Ships = []string{"."}
+
+	res, err := Run(context.Background(), Options{Dir: dir, Registry: reg, Offline: true, Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Ships.Determined {
+		t.Fatalf("ships was not determined: %s", res.Ships.Reason)
+	}
+	if res.Ships.DevOnly != 1 || res.Ships.Shipped != 1 {
+		t.Errorf("ships report = %+v, want one of each", res.Ships)
+	}
+
+	byRule := map[string]finding.Finding{}
+	for _, f := range res.Findings {
+		byRule[f.RuleID] = f
+	}
+	if !byRule["GHSA-tool"].Package.DevOnly {
+		t.Error("a module reachable only from tools/ should be marked build-only")
+	}
+	if byRule["GHSA-prod"].Package.DevOnly {
+		t.Error("a module the binary links must not be marked build-only")
+	}
+	// The point of knowing: the same advisory is a smaller problem in a
+	// dependency that never reaches production.
+	if byRule["GHSA-tool"].RiskScore >= byRule["GHSA-prod"].RiskScore {
+		t.Errorf("build-only scored %.0f against shipped %.0f; knowing should change the risk",
+			byRule["GHSA-tool"].RiskScore, byRule["GHSA-prod"].RiskScore)
 	}
 }
