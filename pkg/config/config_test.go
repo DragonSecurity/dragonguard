@@ -290,6 +290,9 @@ func TestTheDocumentedExampleIsAValidConfig(t *testing.T) {
 	if len(cfg.Accept) == 0 || cfg.Accept[0].ApprovedBy == "" {
 		t.Error("accept in the example did not reach Config.Accept")
 	}
+	if len(cfg.Ships) == 0 {
+		t.Error("ships in the example did not reach Config.Ships")
+	}
 	if cfg.SupplyChain.MinScorecard == 0 || cfg.SupplyChain.QuietBelow == 0 {
 		t.Error("supply_chain in the example did not reach Config.SupplyChain")
 	}

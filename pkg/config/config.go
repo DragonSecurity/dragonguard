@@ -89,6 +89,22 @@ type Config struct {
 	// reason the ignore list reports its own count.
 	Accept []Acceptance `yaml:"accept,omitempty" json:"accept,omitempty"`
 
+	// Ships names the packages this project actually ships, as `go list`
+	// patterns: ".", "./cmd/...", an import path.
+	//
+	// Go is the only supported ecosystem that does not record this. go.mod
+	// lists what the module needs to build, so a code-generation tool sits in
+	// the same list as the database driver the server opens at startup, and
+	// every dependency was reported as reaching production. Not "unknown" --
+	// false, which is a claim rather than a gap, and which made the built-in
+	// rule for build-only dependencies impossible to fire.
+	//
+	// Naming the entry points lets the toolchain answer it exactly: anything
+	// outside the closure of these packages is build-only by construction.
+	// Unset means undetermined, and the scan says so rather than continuing to
+	// assert that everything ships.
+	Ships []string `yaml:"ships,omitempty" json:"ships,omitempty"`
+
 	// SupplyChain tunes the upstream-posture engine.
 	SupplyChain SupplyChainPolicy `yaml:"supply_chain,omitempty" json:"supply_chain,omitempty"`
 
@@ -342,6 +358,25 @@ func validateAcceptances(list []Acceptance) error {
 	return nil
 }
 
+// validateShips refuses patterns that would be read as flags.
+//
+// The patterns are passed to `go list` as separate arguments, so there is no
+// shell to inject into -- but a leading dash is read as a flag by the tool
+// itself, and `-ldflags=...` reaching a subprocess from a config file is not a
+// thing to leave to chance.
+func validateShips(patterns []string) error {
+	for i, p := range patterns {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return fmt.Errorf("ships[%d] is empty", i)
+		}
+		if strings.HasPrefix(p, "-") {
+			return fmt.Errorf("ships[%d] %q looks like a flag, not a package pattern", i, p)
+		}
+	}
+	return nil
+}
+
 // SupplyChainPolicy tunes where the upstream-posture engine draws its lines.
 //
 // Exposed because the defaults are a judgement about a whole ecosystem, and a
@@ -426,6 +461,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := validateAcceptances(c.Accept); err != nil {
+		return err
+	}
+	if err := validateShips(c.Ships); err != nil {
 		return err
 	}
 	return c.SupplyChain.validate()

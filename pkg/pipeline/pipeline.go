@@ -40,6 +40,7 @@ import (
 	"github.com/DragonSecurity/dragonguard/pkg/scanner/supplychain"
 	"github.com/DragonSecurity/dragonguard/pkg/scanner/trivy"
 	"github.com/DragonSecurity/dragonguard/pkg/scorecard"
+	"github.com/DragonSecurity/dragonguard/pkg/ships"
 	"github.com/DragonSecurity/dragonguard/pkg/state"
 	"github.com/DragonSecurity/dragonguard/pkg/vcs"
 )
@@ -152,13 +153,25 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 		graph.Merge(r.Graph)
 	}
 
+	// --- establish what actually ships ---
+	//
+	// Before the second pass, because the upstream-posture engine reads
+	// dev_only off the components it is handed, and before the risk model for
+	// the same reason: a build-only dependency is a different risk from one the
+	// server links, and that has to be known before anything scores it.
+	components := graph.Sorted()
+	shipsReport := resolveShipped(ctx, opts, cfg, components, findings)
+	if note := shipsReport.Note(); note != "" {
+		progress(note)
+	}
+
 	// --- second pass: engines that assess the inventory ---
 	//
 	// Separate because the question is different. The first pass reads the
 	// tree; this one reads what the tree resolved to, which does not exist
 	// until the first pass has finished. Running it in the same pass would
 	// mean assessing an empty inventory and reporting the dimension clean.
-	if components := graph.Sorted(); len(components) > 0 {
+	if len(components) > 0 {
 		inventoryTarget := target
 		inventoryTarget.Components = components
 		engineResults = append(engineResults, reg.Run(ctx, inventoryTarget, scanner.RunOptions{
@@ -379,7 +392,8 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 		Ignored:       ignoreReport,
 		Excluded:      excludedReport,
 		Accepted:      acceptReport,
-		Components:    graph.Sorted(),
+		Components:    components,
+		Ships:         shipsReport,
 		Scorecard:     sc,
 		Decision:      decision,
 		Findings:      findings,
@@ -509,4 +523,48 @@ func gitInfo(dir string) (branch, commit string) {
 		return "", ""
 	}
 	return run("rev-parse", "--abbrev-ref", "HEAD"), run("rev-parse", "HEAD")
+}
+
+// resolveShipped establishes which Go dependencies reach production, and says
+// what happened when it cannot.
+//
+// Silence would be the wrong outcome either way. Go records nothing about
+// build-only dependencies, so before this the answer was an unqualified "every
+// dependency ships" -- a claim, not a gap, and one that made the built-in rule
+// for build-only dependencies inert without anything on screen saying so.
+func resolveShipped(
+	ctx context.Context,
+	opts Options,
+	cfg *config.Config,
+	components []scanner.PackageNode,
+	findings []finding.Finding,
+) ships.Report {
+	var hasGo bool
+	for _, c := range components {
+		if !c.Root && isGoEcosystem(c.Ecosystem) {
+			hasGo = true
+			break
+		}
+	}
+	if !hasGo {
+		// Nothing to say. Every other ecosystem records this in its manifest.
+		return ships.Report{}
+	}
+	if len(cfg.Ships) == 0 {
+		return ships.Report{Reason: "set ships: to name the packages that reach production"}
+	}
+
+	shipped, err := ships.Resolve(ctx, opts.Dir, cfg.Ships, cfg.Offline)
+	if err != nil {
+		return ships.Report{Reason: err.Error()}
+	}
+	return ships.Apply(shipped, components, findings)
+}
+
+func isGoEcosystem(eco string) bool {
+	switch strings.ToLower(strings.TrimSpace(eco)) {
+	case "go", "gomod", "golang":
+		return true
+	}
+	return false
 }
