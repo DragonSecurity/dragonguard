@@ -107,6 +107,15 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 		progress = func(string) {}
 	}
 
+	// Before anything else. A setting this build does not understand behaves
+	// exactly like one that was never written, so a person reading a config
+	// that plainly contains the thing they configured has no way to tell that
+	// it did nothing -- which is how an afternoon goes into a block that was
+	// silently discarded at load.
+	if note := cfg.UnrecognizedNote(); note != "" {
+		progress(note)
+	}
+
 	// --- scan ---
 	reg := opts.Registry
 	if reg == nil {
@@ -391,6 +400,7 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 		DragonVersion: report.Version,
 		Ignored:       ignoreReport,
 		Excluded:      excludedReport,
+		Unrecognized:  cfg.Unrecognized,
 		Accepted:      acceptReport,
 		Components:    components,
 		Ships:         shipsReport,
