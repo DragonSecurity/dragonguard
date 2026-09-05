@@ -191,48 +191,67 @@ func (s *Scanner) assess(ctx context.Context, sys depsdev.System, n scanner.Pack
 		return out
 	}
 
-	// Inactivity alone is not abandonment. The Maintained check scores zero
-	// when there have been no commits for ninety days, and a small library
-	// that is simply finished -- clsx, google/uuid -- looks identical to one
-	// nobody is looking after. Requiring weak practice alongside the silence
-	// is what separates them: a project that is both quiet and scores badly on
-	// review, releases and permissions is the one to worry about.
+	// One finding per dependency, not one per rule that happens to match.
+	//
+	// These two conditions overlap by construction -- quiet requires an
+	// overall below five, weak requires below four -- so anything under four
+	// tripped both and the report carried "otp has been quiet and scores
+	// 2.9/10" directly above "otp scores 2.9/10 on OpenSSF Scorecard". Two
+	// rows, one fact, and a reader counting rows concludes there are twice as
+	// many problems as there are.
+	//
+	// Inactivity alone is not abandonment either. The Maintained check scores
+	// zero after ninety quiet days, which is normal for a library that is
+	// simply finished, so silence only counts when the rest of the score is
+	// weak too.
 	maintained, hasMaintained := checkScore(card, "Maintained")
-	if hasMaintained && maintained == 0 && card.OverallScore > 0 && card.OverallScore < quietAndWeak {
+	quiet := hasMaintained && maintained == 0
+	weak := card.OverallScore > 0 && card.OverallScore < lowScorecard
+
+	switch {
+	case weak:
+		title := fmt.Sprintf("%s scores %.1f/10 on OpenSSF Scorecard", n.Name, card.OverallScore)
+		msg := "Weakest checks: " + weakest(card) + ". Scorecard measures a " +
+			"project's process, not this dependency's risk to you."
+		if quiet {
+			// The silence is worth saying, but as part of the same finding
+			// rather than as a second one.
+			title = fmt.Sprintf("%s scores %.1f/10 upstream and has been quiet",
+				n.Name, card.OverallScore)
+			msg = "No recent commits or releases, alongside weak scores elsewhere. " +
+				"Weakest checks: " + weakest(card) + "."
+		}
 		out = append(out, finding.Finding{
-			Scanner:  Name,
-			Category: finding.CategorySupplyChain,
-			RuleID:   "supply-chain/unmaintained",
-			Title: fmt.Sprintf("%s has been quiet and scores %.1f/10 upstream",
-				n.Name, card.OverallScore),
-			Message: "No recent commits or releases, alongside weak scores elsewhere. " +
-				"Worth a look before the next vulnerability lands in it, but a small " +
-				"library that is simply finished looks the same from here.",
-			// Informational on purpose. See the note on severity below.
+			Scanner:    Name,
+			Category:   finding.CategorySupplyChain,
+			RuleID:     "supply-chain/weak-upstream",
+			Title:      title,
+			Message:    msg,
 			Severity:   finding.SeverityInfo,
 			Package:    pkg,
 			Location:   finding.Location{File: n.Name + "@" + n.Version},
 			References: scorecardRefs(card),
-			Metadata:   map[string]any{"scorecard": card.OverallScore},
+			Metadata:   map[string]any{"scorecard": card.OverallScore, "quiet": quiet},
+		})
+
+	case quiet && card.OverallScore > 0 && card.OverallScore < quietAndWeak:
+		out = append(out, finding.Finding{
+			Scanner:  Name,
+			Category: finding.CategorySupplyChain,
+			RuleID:   "supply-chain/quiet",
+			Title: fmt.Sprintf("%s has been quiet and scores %.1f/10 upstream",
+				n.Name, card.OverallScore),
+			Message: "No recent commits or releases. Worth a look before the next " +
+				"vulnerability lands in it, though a library that is simply " +
+				"finished looks the same from here.",
+			Severity:   finding.SeverityInfo,
+			Package:    pkg,
+			Location:   finding.Location{File: n.Name + "@" + n.Version},
+			References: scorecardRefs(card),
+			Metadata:   map[string]any{"scorecard": card.OverallScore, "quiet": true},
 		})
 	}
 
-	if card.OverallScore > 0 && card.OverallScore < lowScorecard {
-		out = append(out, finding.Finding{
-			Scanner:  Name,
-			Category: finding.CategorySupplyChain,
-			RuleID:   "supply-chain/low-scorecard",
-			Title: fmt.Sprintf("%s scores %.1f/10 on OpenSSF Scorecard",
-				n.Name, card.OverallScore),
-			Message: "Weakest checks: " + weakest(card) + ". Scorecard measures a " +
-				"project's process, not this dependency's risk to you.",
-			Severity:   finding.SeverityInfo,
-			Package:    pkg,
-			Location:   finding.Location{File: n.Name + "@" + n.Version},
-			References: scorecardRefs(card),
-			Metadata:   map[string]any{"scorecard": card.OverallScore},
-		})
-	}
 	return out
 }
 
