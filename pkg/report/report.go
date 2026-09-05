@@ -56,6 +56,41 @@ type Result struct {
 	// path from the scan, and only the second one is a decision this project
 	// made about what it does not want to hear about.
 	Excluded ignore.Report `json:"excluded"`
+	// Accepted records the standing exceptions the acceptance register applied,
+	// and the ones that have run out.
+	Accepted AcceptanceReport `json:"accepted"`
+}
+
+// AcceptanceReport summarises what the `accept:` register did to this scan.
+type AcceptanceReport struct {
+	// Entries is how many acceptances were in force.
+	Entries int `json:"entries"`
+	// Applied is how many findings they matched.
+	//
+	// Reported separately from Entries because the interesting case is zero: a
+	// register whose entries match nothing has usually outlived the findings it
+	// was written for, and nothing else on screen would say so.
+	Applied int `json:"applied"`
+	// Expired names acceptances whose date has passed. Their findings count
+	// again, which is what the date was for.
+	Expired []string `json:"expired,omitempty"`
+}
+
+// Note renders the one-line summary, or empty when the register is unused.
+func (r AcceptanceReport) Note() string {
+	if r.Entries == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d finding(s) accepted by %d standing exception(s)", r.Applied, r.Entries)
+}
+
+// ExpiredNote renders the expiry warning, or empty when nothing has run out.
+func (r AcceptanceReport) ExpiredNote() string {
+	if len(r.Expired) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d acceptance(s) no longer apply: %s",
+		len(r.Expired), strings.Join(r.Expired, "; "))
 }
 
 // Options tune rendering.
@@ -208,6 +243,14 @@ func Text(w io.Writer, r *Result, opts Options) error {
 	}
 	if note := r.Excluded.Note(); note != "" {
 		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "ignore", p.c(dim, note))
+	}
+	if note := r.Accepted.Note(); note != "" {
+		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "accepted", p.c(dim, note))
+	}
+	if note := r.Accepted.ExpiredNote(); note != "" {
+		// Not dim. An expiry that passed is a decision that needs remaking, and
+		// it arrives as a posture drop with no visible cause otherwise.
+		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(yellow, "!!"), "accepted", p.c(yellow, note))
 	}
 
 	// Verdict.

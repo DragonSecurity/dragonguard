@@ -287,6 +287,15 @@ func TestTheDocumentedExampleIsAValidConfig(t *testing.T) {
 	if cfg.Asset.Environment == "" || cfg.Asset.Criticality == "" {
 		t.Error("asset context in the example did not reach Config.Asset")
 	}
+	if len(cfg.Accept) == 0 || cfg.Accept[0].ApprovedBy == "" {
+		t.Error("accept in the example did not reach Config.Accept")
+	}
+	if cfg.SupplyChain.MinScorecard == 0 || cfg.SupplyChain.QuietBelow == 0 {
+		t.Error("supply_chain in the example did not reach Config.SupplyChain")
+	}
+	if cfg.Licenses.Allow[0].ApprovedBy == "" {
+		t.Error("licenses.allow[].approved_by in the example did not reach LicenseDecision")
+	}
 }
 
 // yamlBlockAfter returns the first fenced yaml block following a heading.
@@ -307,4 +316,44 @@ func yamlBlockAfter(t *testing.T, doc, heading string) string {
 		t.Fatalf("unterminated yaml block after %q", heading)
 	}
 	return rest[:end]
+}
+
+// An exception with no reason and no author is the thing this surface exists to
+// prevent: a line in a config that silences a finding and answers no question
+// about why, so nobody can ever decide whether it is still true.
+func TestAnAcceptanceMustSayWhyAndWhoDecided(t *testing.T) {
+	good := Acceptance{Finding: "GO-1", Reason: "no upstream fix", ApprovedBy: "security"}
+
+	for name, a := range map[string]Acceptance{
+		"no selector":  {Reason: "x", ApprovedBy: "y"},
+		"no reason":    {Finding: "GO-1", ApprovedBy: "y"},
+		"no approver":  {Finding: "GO-1", Reason: "x"},
+		"bad date":     {Finding: "GO-1", Reason: "x", ApprovedBy: "y", Expires: "next tuesday"},
+		"quote in sel": {Finding: `GO-1" || true || "`, Reason: "x", ApprovedBy: "y"},
+	} {
+		if err := validateAcceptances([]Acceptance{a}); err == nil {
+			t.Errorf("%s: accepted an entry that should have been refused", name)
+		}
+	}
+
+	if err := validateAcceptances([]Acceptance{good}); err != nil {
+		t.Errorf("a complete acceptance was refused: %v", err)
+	}
+	if err := validateAcceptances([]Acceptance{{
+		Package: "@scope/pkg", Reason: "x", ApprovedBy: "y", Expires: "2027-01-01",
+	}}); err != nil {
+		t.Errorf("a scoped npm package name was refused: %v", err)
+	}
+}
+
+func TestSupplyChainThresholdsMustBeOnTheScorecardScale(t *testing.T) {
+	if err := (SupplyChainPolicy{MinScorecard: 11}).validate(); err == nil {
+		t.Error("a threshold above 10 is not a Scorecard value")
+	}
+	if err := (SupplyChainPolicy{MinScorecard: -1}).validate(); err == nil {
+		t.Error("a negative threshold is not a Scorecard value")
+	}
+	if err := (SupplyChainPolicy{MinScorecard: 6, QuietBelow: 7}).validate(); err != nil {
+		t.Errorf("a valid pair was refused: %v", err)
+	}
 }

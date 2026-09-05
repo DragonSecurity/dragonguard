@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -74,6 +75,22 @@ type Config struct {
 	// Licenses records which dependency licences this project has decided
 	// about. See LicensePolicy.
 	Licenses LicensePolicy `yaml:"licenses,omitempty" json:"licenses,omitempty"`
+
+	// Accept records findings this project has decided to live with.
+	//
+	// Distinct from Ignore, which is about paths that were never in scope.
+	// An acceptance is about a finding that is real, in scope, and staying:
+	// an advisory with no fixed version, a dependency whose upstream process
+	// score is not this project's risk. It keeps the finding in the report,
+	// marked, and stops it counting against the score or the gate.
+	//
+	// Shown rather than deleted, because a suppression nobody can see is
+	// indistinguishable from a scanner that stopped looking -- the same
+	// reason the ignore list reports its own count.
+	Accept []Acceptance `yaml:"accept,omitempty" json:"accept,omitempty"`
+
+	// SupplyChain tunes the upstream-posture engine.
+	SupplyChain SupplyChainPolicy `yaml:"supply_chain,omitempty" json:"supply_chain,omitempty"`
 
 	// Ignore lists path globs excluded from all engines.
 	//
@@ -233,6 +250,124 @@ type LicenseDecision struct {
 	ID string `yaml:"id" json:"id"`
 	// Reason is why this project decided what it decided. Required.
 	Reason string `yaml:"reason" json:"reason"`
+	// ApprovedBy names who made the call.
+	//
+	// Optional here and required on Accept, which is an inconsistency with a
+	// reason: this field is being added to a surface projects already use, and
+	// requiring it would fail every existing config on upgrade. New entries
+	// should carry it -- a standing exception whose author cannot be found is
+	// one nobody is willing to revisit.
+	ApprovedBy string `yaml:"approved_by,omitempty" json:"approved_by,omitempty"`
+}
+
+// Acceptance is a standing decision to carry a finding rather than fix it.
+type Acceptance struct {
+	// Finding selects by advisory identifier, CVE, or engine rule id --
+	// GO-2026-5932, CVE-2021-44228, supply-chain/weak-upstream.
+	Finding string `yaml:"finding,omitempty" json:"finding,omitempty"`
+	// Package selects by dependency name, for a decision about a dependency
+	// rather than about a particular advisory in it.
+	Package string `yaml:"package,omitempty" json:"package,omitempty"`
+	// Reason is why carrying this is acceptable. Required.
+	Reason string `yaml:"reason" json:"reason"`
+	// ApprovedBy names who decided. Required.
+	ApprovedBy string `yaml:"approved_by" json:"approved_by"`
+	// Expires is an optional YYYY-MM-DD date after which the acceptance stops
+	// applying and the finding counts again.
+	//
+	// Optional, but the difference between a register and a graveyard. An
+	// acceptance was written against a situation -- no fix available, a
+	// dependency under review -- and situations change without anyone being
+	// reminded to look. An expiry is that reminder, and an expired entry is
+	// reported rather than silently dropped.
+	Expires string `yaml:"expires,omitempty" json:"expires,omitempty"`
+}
+
+// selectorPattern is narrow for the same reason licenseIDPattern is: these
+// strings are interpolated into CEL literals, so anything that could close the
+// quote is refused at load rather than escaped later.
+var selectorPattern = regexp.MustCompile(`^[A-Za-z0-9@][A-Za-z0-9 ._:/@+-]*$`)
+
+// ExpiresOn parses the expiry, returning false when there is not one.
+func (a Acceptance) ExpiresOn() (time.Time, bool) {
+	if strings.TrimSpace(a.Expires) == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse("2006-01-02", strings.TrimSpace(a.Expires))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// Label names the acceptance in a report.
+func (a Acceptance) Label() string {
+	switch {
+	case a.Finding != "" && a.Package != "":
+		return a.Finding + " in " + a.Package
+	case a.Finding != "":
+		return a.Finding
+	default:
+		return a.Package
+	}
+}
+
+func validateAcceptances(list []Acceptance) error {
+	for i, a := range list {
+		f, pkg := strings.TrimSpace(a.Finding), strings.TrimSpace(a.Package)
+		if f == "" && pkg == "" {
+			return fmt.Errorf("accept[%d] selects nothing: give a finding or a package", i)
+		}
+		for _, sel := range []struct{ name, val string }{{"finding", f}, {"package", pkg}} {
+			if sel.val != "" && !selectorPattern.MatchString(sel.val) {
+				return fmt.Errorf("accept[%d] %s %q is not a valid selector", i, sel.name, sel.val)
+			}
+		}
+		if strings.TrimSpace(a.Reason) == "" {
+			// Refused rather than defaulted, as with a licence approval: an
+			// exception with no reason is the failure mode this field exists
+			// to prevent.
+			return fmt.Errorf("accept[%d] (%s) needs a reason", i, a.Label())
+		}
+		if strings.TrimSpace(a.ApprovedBy) == "" {
+			return fmt.Errorf("accept[%d] (%s) needs approved_by", i, a.Label())
+		}
+		if raw := strings.TrimSpace(a.Expires); raw != "" {
+			if _, err := time.Parse("2006-01-02", raw); err != nil {
+				return fmt.Errorf("accept[%d] (%s) expires %q is not a YYYY-MM-DD date",
+					i, a.Label(), a.Expires)
+			}
+		}
+	}
+	return nil
+}
+
+// SupplyChainPolicy tunes where the upstream-posture engine draws its lines.
+//
+// Exposed because the defaults are a judgement about a whole ecosystem, and a
+// project knows its own dependencies better than a constant does. Nothing here
+// gates -- these findings are recorded at info -- so the knobs change what is
+// worth reading, not what blocks a release.
+type SupplyChainPolicy struct {
+	// MinScorecard is the OpenSSF Scorecard below which a direct dependency is
+	// worth a decision. Zero means the default, 4.0.
+	MinScorecard float64 `yaml:"min_scorecard,omitempty" json:"min_scorecard,omitempty"`
+	// QuietBelow is the score below which prolonged upstream inactivity is
+	// worth reporting. Zero means the default, 5.0. Above it, no recent
+	// commits usually means finished rather than abandoned.
+	QuietBelow float64 `yaml:"quiet_below,omitempty" json:"quiet_below,omitempty"`
+}
+
+func (p SupplyChainPolicy) validate() error {
+	for _, f := range []struct {
+		name string
+		val  float64
+	}{{"min_scorecard", p.MinScorecard}, {"quiet_below", p.QuietBelow}} {
+		if f.val < 0 || f.val > 10 {
+			return fmt.Errorf("supply_chain.%s is %.1f; Scorecard runs 0 to 10", f.name, f.val)
+		}
+	}
+	return nil
 }
 
 // licenseIDPattern is deliberately narrow. These identifiers are interpolated
@@ -287,7 +422,13 @@ func (c *Config) Validate() error {
 	}
 	c.Asset.Criticality = crit
 
-	return c.Licenses.validate()
+	if err := c.Licenses.validate(); err != nil {
+		return err
+	}
+	if err := validateAcceptances(c.Accept); err != nil {
+		return err
+	}
+	return c.SupplyChain.validate()
 }
 
 // Resolve turns a config-relative path into an absolute one.

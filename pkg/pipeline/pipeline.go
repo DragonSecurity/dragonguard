@@ -266,6 +266,13 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 	if err := policyEngine.LoadLicensePolicy(cfg.Licenses); err != nil {
 		return nil, err
 	}
+	// Last, so an acceptance is the final word. It is the most specific
+	// statement a project can make -- this finding, reviewed, by this person --
+	// and a pack rule that outranked it would make the register look broken.
+	expiredAcceptances, err := policyEngine.LoadAcceptances(now, cfg.Accept)
+	if err != nil {
+		return nil, err
+	}
 	if n := len(policyEngine.Rules()); n > 0 {
 		progress(fmt.Sprintf("loaded %d policy rules", n))
 	}
@@ -276,6 +283,22 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 		"total_findings": int64(len(findings)),
 	}
 	evaluations := policyEngine.EvaluateAll(findings, cfg.Asset, scanCtx)
+
+	acceptReport := report.AcceptanceReport{
+		Entries: len(cfg.Accept) - len(expiredAcceptances),
+		Expired: expiredAcceptances,
+	}
+	for i := range findings {
+		for _, tag := range findings[i].PolicyTags {
+			if tag == "accepted" {
+				acceptReport.Applied++
+				break
+			}
+		}
+	}
+	if note := acceptReport.ExpiredNote(); note != "" {
+		progress(note)
+	}
 
 	// A policy risk_boost changes the score, so the rating it implies has to
 	// be recomputed. Leaving a stale rating would let a boosted finding be
@@ -355,6 +378,7 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 		DragonVersion: report.Version,
 		Ignored:       ignoreReport,
 		Excluded:      excludedReport,
+		Accepted:      acceptReport,
 		Components:    graph.Sorted(),
 		Scorecard:     sc,
 		Decision:      decision,

@@ -16,8 +16,9 @@ them, uncommented and at the indentation they actually take, so there is one
 place to see both what exists and where it goes; a real config is much shorter.
 
 The top-level keys are `version`, `project`, `asset`, `engines`, `policies`,
-`baseline`, `default_branch`, `licenses`, `ignore`, `state_dir`, and the
-switches at the end. Anything not in that list belongs inside one of them.
+`baseline`, `default_branch`, `licenses`, `accept`, `supply_chain`, `ignore`,
+`state_dir`, and the switches at the end. Anything not in that list belongs
+inside one of them.
 
 ```yaml
 version: dragonguard/v1
@@ -108,9 +109,36 @@ licenses:
       reason: >-
         Consumed unmodified. The obligation attaches to modified MPL files and
         we vendor and patch none of them. Revisit if any is ever forked.
+      approved_by: the security team
   deny:
     - id: AGPL-3.0
       reason: We ship a hosted service; the network clause is not acceptable here.
+      approved_by: the security team
+
+# ---------------------------------------------------------------------------
+# Findings this project has decided to carry rather than fix. Distinct from
+# ignore: below, which is about paths that were never in scope -- an
+# acceptance is about a finding that is real, in scope, and staying. It stays
+# in the report, marked, and stops counting. See "Accepting a finding you are
+# not going to fix" below.
+# ---------------------------------------------------------------------------
+accept:
+  - finding: GO-2026-5932
+    reason: >-
+      openpgp is unmaintained upstream with no replacement, and we neither
+      sign nor verify PGP. Nothing to upgrade to.
+    approved_by: the security team
+  - package: github.com/spf13/viper
+    finding: supply-chain/weak-upstream
+    reason: Reviewed 2026-09; Scorecard measures process, not this library's risk.
+    approved_by: the security team
+    expires: 2027-03-01
+
+# Where the upstream-posture engine draws its lines. These are the defaults;
+# see "Tuning the supply-chain engine" below.
+supply_chain:
+  min_scorecard: 4.0
+  quiet_below: 5.0
 
 # Path globs excluded from every engine. See "What ignore: actually
 # excludes" below for how a pattern is matched.
@@ -251,13 +279,21 @@ licenses:
       reason: >-
         Consumed unmodified. The obligation attaches to modified MPL files and
         we vendor and patch none of them. Revisit if any is ever forked.
+      approved_by: the security team
   deny:
     - id: AGPL-3.0
       reason: We ship a hosted service; the network clause is not acceptable here.
+      approved_by: the security team
 ```
 
 An approved licence's findings stop counting against the `dependencies` score.
 A denied licence fails the gate whatever the scanner made of it.
+
+`approved_by` is optional here and required on `accept:` below. The
+inconsistency is deliberate: this field was added to a surface projects already
+use, and requiring it would have failed every existing config on upgrade. Write
+it anyway — a standing exception whose author cannot be found is one nobody is
+willing to revisit.
 
 **The reason is required, not optional.** A bare list of approved identifiers
 records the conclusion and loses the reasoning, so when somebody later forks
@@ -285,6 +321,115 @@ anything else. Anything more conditional than a list is written directly:
 `finding.license` and `finding.license_category` are empty strings for findings
 that are not about a licence, so a rule using them never errors — it simply
 does not match.
+
+## Accepting a finding you are not going to fix
+
+Some findings cannot be closed. `GO-2026-5932` says
+`golang.org/x/crypto/openpgp` is unmaintained: there is no fixed version, no
+replacement, and no amount of upgrading makes it go away. Others could be
+closed and should not be — an upstream project with a weak OpenSSF Scorecard is
+usually a small library that does one thing correctly, not a risk.
+
+Before `accept:`, the only controls for either were to turn the engine off or
+to add the path to `ignore:`, and both of those say something untrue. Turning
+the engine off stops looking. `ignore:` claims the path was never in scope.
+
+```yaml
+accept:
+  - finding: GO-2026-5932
+    reason: >-
+      openpgp is unmaintained upstream with no replacement, and we neither sign
+      nor verify PGP. Nothing to upgrade to.
+    approved_by: the security team
+
+  - package: github.com/spf13/viper
+    finding: supply-chain/weak-upstream
+    reason: >-
+      Reviewed 2026-09. Scorecard measures process, and this is a stable config
+      library we read before adopting.
+    approved_by: the security team
+    expires: 2027-03-01
+```
+
+An accepted finding **stays in the report**, marked `accepted`, and stops
+counting against the score and the gate. It is not deleted, for the reason
+every other filter here reports itself: a suppression nobody can see is
+indistinguishable from a scanner that stopped looking. The scan prints an
+`accepted` line saying how many entries are in force and how many findings they
+matched — and if that second number is zero, the register has outlived the
+findings it was written for.
+
+### Selectors
+
+| Field | Matches |
+| --- | --- |
+| `finding` | an advisory id (`GO-2026-5932`, `GHSA-…`), a CVE, or an engine rule id (`supply-chain/weak-upstream`) |
+| `package` | a dependency name (`github.com/spf13/viper`, `@scope/pkg`) |
+
+At least one is required. Give both and they must both match, which is how you
+accept one advisory *in one dependency* rather than everywhere it appears.
+
+`finding` matches the rule id **or** any CVE on the finding, because which
+identifier a finding carries depends on the engine that reported it and you
+should not have to know which one ran.
+
+### `reason` and `approved_by` are both required
+
+Same argument as the licence reason, one step further. An exception silences a
+real finding, so the two questions anyone will ask about it in a year are why,
+and who decided. A register that answers neither is a register nobody dares
+delete from.
+
+### `expires` is what makes it a register and not a graveyard
+
+```yaml
+    expires: 2027-03-01
+```
+
+Optional, and the most useful field here. An acceptance is written against a
+situation — no fix available yet, a dependency under review — and situations
+change without reminding anyone to look.
+
+Past the date the acceptance stops applying and the finding counts again, which
+is the point. It is also **reported**, on a highlighted `accepted` line, rather
+than being dropped in silence: a lapsed expiry that said nothing would look
+exactly like the acceptance never having been written, and the first anyone
+would know is a posture drop with no cause.
+
+Acceptances are desugared into ordinary policy rules like `licenses:`, so
+`approved_by` shows up as the rule's description and the whole register stays
+auditable rather than becoming a second hidden mechanism.
+
+## Tuning the supply-chain engine
+
+The `supply_chain` dimension reports *upstream posture*: OpenSSF Scorecard and
+publication activity for the dependencies your manifest names directly. Its two
+thresholds are a judgement about a whole ecosystem, and a project knows its own
+tree better than a constant does.
+
+```yaml
+supply_chain:
+  min_scorecard: 4.0   # below this, a direct dependency is worth a decision
+  quiet_below: 5.0     # below this, prolonged upstream silence is worth saying
+```
+
+Those are the defaults. `4.0` rather than something higher because most of the
+ecosystem sits between four and seven, and a threshold that flags half the
+dependency tree is a threshold nobody reads. Lower it if your tree is mostly
+small finished libraries; raise it if you only take well-run upstreams.
+
+An unset or empty `supply_chain:` block means the defaults, not silence.
+Reading an omitted field as "flag nothing" would turn adding an empty block
+into a coverage gap.
+
+Nothing here gates. These findings are recorded at `info`, so the thresholds
+change what is worth reading, not what blocks a release — the one exception
+being `supply-chain/deprecated`, which is `high` and is not a threshold at all:
+a publisher marking a version deprecated is a statement that it will not be
+fixed.
+
+For a decision about one specific dependency rather than about the whole
+ecosystem, use `accept:` above.
 
 ## `rules:` replaces, it does not extend
 
