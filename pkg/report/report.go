@@ -81,6 +81,16 @@ type AcceptanceReport struct {
 	// Expired names acceptances whose date has passed. Their findings count
 	// again, which is what the date was for.
 	Expired []string `json:"expired,omitempty"`
+	// Unmatched names acceptances that are in force and matched nothing.
+	//
+	// Named rather than merely counted, because the two reasons for it need
+	// opposite responses and only the entry itself distinguishes them. The
+	// finding may be genuinely gone, in which case the entry can go too. Or
+	// the selector is wrong -- a rule id guessed from a finding's title, a
+	// package spelled the way the report abbreviates it -- in which case
+	// somebody has written down a decision that is quietly not in effect,
+	// which is the failure this whole register exists to prevent.
+	Unmatched []string `json:"unmatched,omitempty"`
 }
 
 // Note renders the one-line summary, or empty when the register is unused.
@@ -89,6 +99,15 @@ func (r AcceptanceReport) Note() string {
 		return ""
 	}
 	return fmt.Sprintf("%d finding(s) accepted by %d standing exception(s)", r.Applied, r.Entries)
+}
+
+// UnmatchedNote renders the warning for acceptances that matched nothing.
+func (r AcceptanceReport) UnmatchedNote() string {
+	if len(r.Unmatched) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d acceptance(s) matched nothing: %s",
+		len(r.Unmatched), strings.Join(r.Unmatched, "; "))
 }
 
 // ExpiredNote renders the expiry warning, or empty when nothing has run out.
@@ -264,6 +283,9 @@ func Text(w io.Writer, r *Result, opts Options) error {
 	}
 	if note := r.Ships.Note(); note != "" {
 		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "ships", p.c(dim, note))
+	}
+	if note := r.Accepted.UnmatchedNote(); note != "" {
+		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(yellow, "!!"), "accepted", p.c(yellow, note))
 	}
 	if note := r.Accepted.ExpiredNote(); note != "" {
 		// Not dim. An expiry that passed is a decision that needs remaking, and

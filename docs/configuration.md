@@ -394,6 +394,40 @@ accept one advisory *in one dependency* rather than everywhere it appears.
 identifier a finding carries depends on the engine that reported it and you
 should not have to know which one ran.
 
+### Which selector to use, and the trap in narrowing
+
+`package:` alone accepts **any** finding about that dependency. That is usually
+what "we reviewed this library and it is fine" means, and it keeps working when
+the finding about it changes.
+
+Adding `finding:` narrows the entry to one specific rule, and both must then
+match. That is right when you have accepted one advisory in a dependency and
+still want to hear about the next one — but it is easy to get wrong, because
+**which supply-chain rule fires depends on the score, not on the dependency**:
+
+| Score | Rule |
+| --- | --- |
+| below `min_scorecard` (default 4.0) | `supply-chain/weak-upstream` |
+| between it and `quiet_below` (default 5.0), with no recent commits | `supply-chain/quiet` |
+
+So a project accepting `supply-chain/weak-upstream` for four dependencies
+scoring 2.9 to 3.7 sees all four accepted, and the fifth at 4.5 silently not —
+because 4.5 is *above* the threshold and its finding is `supply-chain/quiet`.
+The report shows a finding's title and never its rule id, so there is nothing
+on screen to work that out from.
+
+Two things follow. Prefer `package:` on its own unless you specifically mean
+one rule. And when an entry is in force and matches nothing, the scan says so
+by name:
+
+```
+  !!  accepted       1 acceptance(s) matched nothing: supply-chain/weak-upstream in github.com/spf13/viper
+```
+
+Named rather than counted, because the two causes want opposite responses: the
+finding is genuinely gone and the entry can go with it, or the selector is
+wrong and a decision somebody recorded is quietly not in effect.
+
 ### `reason` and `approved_by` are both required
 
 Same argument as the licence reason, one step further. An exception silences a

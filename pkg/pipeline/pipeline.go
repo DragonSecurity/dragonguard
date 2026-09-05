@@ -318,6 +318,7 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 			}
 		}
 	}
+	acceptReport.Unmatched = unmatchedAcceptances(cfg, expiredAcceptances, evaluations)
 	if note := acceptReport.ExpiredNote(); note != "" {
 		progress(note)
 	}
@@ -577,4 +578,47 @@ func isGoEcosystem(eco string) bool {
 		return true
 	}
 	return false
+}
+
+// unmatchedAcceptances names entries that are in force and exempted nothing.
+//
+// Worth reporting because a selector is easy to get subtly wrong and
+// impossible to check by reading. A supply-chain finding titled "viper has
+// been quiet and scores 4.5/10" is rule supply-chain/quiet, not
+// supply-chain/weak-upstream, and nothing on screen says so -- so an
+// acceptance written against the wrong one is a decision somebody recorded,
+// believes is in effect, and is not.
+//
+// An entry may also match nothing because the finding is genuinely gone, which
+// is the happy case and wants the opposite response: delete the entry. Naming
+// which entry is what lets the two be told apart.
+func unmatchedAcceptances(cfg *config.Config, expired []string, evals []policy.Evaluation) []string {
+	if len(cfg.Accept) == 0 {
+		return nil
+	}
+	fired := map[string]bool{}
+	for _, ev := range evals {
+		for _, res := range ev.Results {
+			if strings.HasPrefix(res.RuleID, policy.AcceptRulePrefix) {
+				fired[res.RuleID] = true
+			}
+		}
+	}
+	lapsed := make(map[string]bool, len(expired))
+	for _, e := range expired {
+		lapsed[e] = true
+	}
+
+	var out []string
+	for _, a := range cfg.Accept {
+		if fired[policy.AcceptRuleID(a)] {
+			continue
+		}
+		// An expired entry already has its own, more specific line.
+		if lapsed[a.Label()+" (expired "+a.Expires+")"] {
+			continue
+		}
+		out = append(out, a.Label())
+	}
+	return out
 }

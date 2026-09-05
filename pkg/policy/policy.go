@@ -497,6 +497,13 @@ func (e *Engine) LoadLicensePolicy(lp config.LicensePolicy) error {
 	return e.LoadRules("licenses (.dragon.yaml)", raw)
 }
 
+// AcceptRulePrefix marks the compiled form of an acceptance, so a caller can
+// tell which of its own entries actually fired.
+const AcceptRulePrefix = "accept/"
+
+// AcceptRuleID is the rule an acceptance compiles to.
+func AcceptRuleID(a config.Acceptance) string { return AcceptRulePrefix + a.Label() }
+
 // LoadAcceptances compiles the project's standing exceptions into ordinary
 // rules, and reports the ones that have expired.
 //
@@ -534,7 +541,7 @@ func (e *Engine) LoadAcceptances(now time.Time, list []config.Acceptance) ([]str
 		}
 
 		rules = append(rules, Rule{
-			ID:          fmt.Sprintf("accept/%s", a.Label()),
+			ID:          AcceptRuleID(a),
 			Description: a.Reason + " -- approved by " + a.ApprovedBy,
 			Match:       Match{All: match},
 			Then: Effect{
