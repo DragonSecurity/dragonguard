@@ -97,16 +97,80 @@ func (z *ZAP) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding, er
 	}
 
 	cmd := exec.CommandContext(ctx, bin, args...)
-	var stderr strings.Builder
+	// Both streams: ZAP puts the reason a run failed on stdout as often as on
+	// stderr, and reading only stderr meant the one line that explained the
+	// failure was the line we threw away.
+	var out, stderr strings.Builder
+	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 	// ZAP exits non-zero when it finds issues, which is success here.
 	_ = cmd.Run()
 
 	data, err := os.ReadFile(report)
 	if err != nil || len(data) == 0 {
-		return nil, fmt.Errorf("zap produced no report: %s", truncate(stderr.String(), 400))
+		return nil, fmt.Errorf("zap produced no report: %s",
+			zapFailureReason(out.String(), stderr.String()))
 	}
 	return parseZAPReport(data, target)
+}
+
+// zapFailureReason pulls the useful sentence out of a failed ZAP run.
+//
+// ZAP opens a failure with "Failed to access summary file
+// /home/zap/zap_out.json", which is emitted on every failed run and says
+// nothing about the cause. Reporting the head of stderr therefore produced
+// exactly that line, and a scan that failed because a hostname did not resolve
+// looked like a file-permission problem inside the container -- which is where
+// somebody then spends their afternoon.
+//
+// The cause is in the "Automation plan failures" block underneath it, so that
+// is what gets reported when it is there.
+func zapFailureReason(stdout, stderr string) string {
+	const marker = "Automation plan failures:"
+	for _, stream := range []string{stderr, stdout} {
+		i := strings.Index(stream, marker)
+		if i < 0 {
+			continue
+		}
+		var reasons []string
+		for _, line := range strings.Split(stream[i+len(marker):], "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			reasons = append(reasons, line)
+			if len(reasons) == 3 {
+				break
+			}
+		}
+		if len(reasons) > 0 {
+			return truncate(strings.Join(reasons, "; "), 400)
+		}
+	}
+
+	// No structured failure. The tail is still a better guess than the head:
+	// whatever ZAP said last is closer to why it stopped than its banner.
+	for _, stream := range []string{stderr, stdout} {
+		if t := lastMeaningfulLines(stream, 2); t != "" {
+			return truncate(t, 400)
+		}
+	}
+	return "no output"
+}
+
+// lastMeaningfulLines returns the final non-empty lines, skipping the summary
+// file complaint that accompanies every failure.
+func lastMeaningfulLines(stream string, n int) string {
+	lines := strings.Split(stream, "\n")
+	var kept []string
+	for i := len(lines) - 1; i >= 0 && len(kept) < n; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || strings.Contains(line, "Failed to access summary file") {
+			continue
+		}
+		kept = append([]string{line}, kept...)
+	}
+	return strings.Join(kept, "; ")
 }
 
 func (z *ZAP) command(target, report string) (args []string, bin string, err error) {
