@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DragonSecurity/dragonguard/pkg/config"
 	"github.com/DragonSecurity/dragonguard/pkg/finding"
@@ -373,5 +374,146 @@ func TestLicenceIsVisibleToHandWrittenRules(t *testing.T) {
 	other := finding.Finding{Category: finding.CategorySCA, RuleID: "CVE-2026-1"}
 	if ev := e.Evaluate(&other, config.Asset{}, nil); ev.Exempt {
 		t.Error("a non-licence finding matched a licence rule")
+	}
+}
+
+func acceptEngine(t *testing.T, now time.Time, list ...config.Acceptance) (*Engine, []string) {
+	t.Helper()
+	e, err := NewEngine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired, err := e.LoadAcceptances(now, list)
+	if err != nil {
+		t.Fatalf("load acceptances: %v", err)
+	}
+	return e, expired
+}
+
+// The finding this register was built for: an advisory against an unmaintained
+// package with no fixed version and no replacement. Nothing can close it, so
+// without a way to record the decision the only route to a clean scorecard is
+// to stop scanning.
+func TestAnAdvisoryWithNoFixCanBeAccepted(t *testing.T) {
+	now := time.Now()
+	e, _ := acceptEngine(t, now, config.Acceptance{
+		Finding:    "GO-2026-5932",
+		Reason:     "openpgp is unmaintained upstream and has no replacement; we do not sign or verify PGP",
+		ApprovedBy: "security",
+	})
+
+	f := finding.Finding{
+		Scanner: "osv", Category: finding.CategorySCA, RuleID: "GO-2026-5932",
+		Severity: finding.SeverityMedium, RiskScore: 42,
+		Package: &finding.Package{Ecosystem: "go", Name: "golang.org/x/crypto", Version: "0.56.0"},
+	}
+	f.Normalize(now)
+
+	got := []finding.Finding{f}
+	e.EvaluateAll(got, config.Asset{Environment: "production"}, nil)
+	if got[0].Status != finding.StatusAccepted {
+		t.Errorf("status = %s, want accepted", got[0].Status)
+	}
+}
+
+// Selecting by CVE, because which identifier a finding carries depends on the
+// engine that reported it and the author should not have to know.
+func TestAcceptanceMatchesACVEAsWellAsARuleID(t *testing.T) {
+	now := time.Now()
+	e, _ := acceptEngine(t, now, config.Acceptance{
+		Finding: "CVE-2021-44228", Reason: "not on the classpath", ApprovedBy: "security",
+	})
+	f := finding.Finding{
+		Scanner: "trivy", Category: finding.CategorySCA, RuleID: "TRIVY-1234",
+		CVE: []string{"CVE-2021-44228"}, Severity: finding.SeverityCritical,
+		Package: &finding.Package{Ecosystem: "maven", Name: "log4j-core", Version: "2.14.0"},
+	}
+	f.Normalize(now)
+
+	got := []finding.Finding{f}
+	e.EvaluateAll(got, config.Asset{Environment: "production"}, nil)
+	if got[0].Status != finding.StatusAccepted {
+		t.Error("an acceptance written against a CVE must match a finding that carries it under another rule id")
+	}
+}
+
+// The supply-chain case: a decision about a dependency rather than about one
+// advisory in it.
+func TestAcceptanceCanBeScopedToOneDependency(t *testing.T) {
+	now := time.Now()
+	e, _ := acceptEngine(t, now, config.Acceptance{
+		Package:    "github.com/spf13/viper",
+		Finding:    "supply-chain/weak-upstream",
+		Reason:     "reviewed; a config library's process score is not our risk",
+		ApprovedBy: "security",
+	})
+
+	viper := finding.Finding{
+		Scanner: "supplychain", Category: finding.CategorySupplyChain,
+		RuleID: "supply-chain/weak-upstream", Severity: finding.SeverityInfo,
+		Package: &finding.Package{Ecosystem: "go", Name: "github.com/spf13/viper", Version: "v1.21.0"},
+	}
+	other := viper
+	other.Package = &finding.Package{Ecosystem: "go", Name: "github.com/go-chi/cors", Version: "v1.2.2"}
+	viper.Normalize(now)
+	other.Normalize(now)
+
+	got := []finding.Finding{viper, other}
+	e.EvaluateAll(got, config.Asset{Environment: "production"}, nil)
+	if got[0].Status != finding.StatusAccepted {
+		t.Error("the accepted dependency should be exempt")
+	}
+	if got[1].Status == finding.StatusAccepted {
+		t.Error("an acceptance scoped to one package must not exempt another")
+	}
+}
+
+// The date is what separates a register from a graveyard.
+func TestAnExpiredAcceptanceStopsApplyingAndSaysSo(t *testing.T) {
+	now := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	e, expired := acceptEngine(t, now,
+		config.Acceptance{
+			Finding: "GO-1", Reason: "waiting on upstream", ApprovedBy: "security",
+			Expires: "2026-01-01",
+		},
+		config.Acceptance{
+			Finding: "GO-2", Reason: "waiting on upstream", ApprovedBy: "security",
+			Expires: "2027-01-01",
+		},
+	)
+
+	if len(expired) != 1 || !strings.Contains(expired[0], "GO-1") {
+		t.Fatalf("expired = %v, want the 2026-01-01 entry named", expired)
+	}
+
+	stale := finding.Finding{Scanner: "osv", Category: finding.CategorySCA, RuleID: "GO-1",
+		Package: &finding.Package{Ecosystem: "go", Name: "a", Version: "1"}}
+	live := finding.Finding{Scanner: "osv", Category: finding.CategorySCA, RuleID: "GO-2",
+		Package: &finding.Package{Ecosystem: "go", Name: "b", Version: "1"}}
+	stale.Normalize(now)
+	live.Normalize(now)
+
+	got := []finding.Finding{stale, live}
+	e.EvaluateAll(got, config.Asset{Environment: "production"}, nil)
+	if got[0].Status == finding.StatusAccepted {
+		t.Error("an acceptance past its expiry must stop applying")
+	}
+	if got[1].Status != finding.StatusAccepted {
+		t.Error("an acceptance still in date must apply")
+	}
+}
+
+// Compiled to CEL like everything else, so a reader can see what a standing
+// exception actually does rather than taking the config's word for it.
+func TestAnAcceptanceIsVisibleInTheRuleList(t *testing.T) {
+	e, _ := acceptEngine(t, time.Now(), config.Acceptance{
+		Finding: "GO-1", Reason: "no upstream fix", ApprovedBy: "the security team",
+	})
+	rules := e.Rules()
+	if len(rules) != 1 {
+		t.Fatalf("got %d rules, want the acceptance compiled into one", len(rules))
+	}
+	if !strings.Contains(rules[0].Description, "the security team") {
+		t.Errorf("description %q should record who approved it", rules[0].Description)
 	}
 }

@@ -251,3 +251,26 @@ func scorecardServer(t *testing.T, scorecard string) *httptest.Server {
 		}
 	}))
 }
+
+// The defaults are a judgement about a whole ecosystem; a project that knows
+// its own tree should be able to move the line without turning the engine off,
+// which was the only control it had.
+func TestThresholdsFallBackToTheDefaultsAndAreOverridable(t *testing.T) {
+	weak, quiet := thresholds(nil)
+	if weak != lowScorecard || quiet != quietAndWeak {
+		t.Errorf("thresholds(nil) = %.1f/%.1f, want the defaults", weak, quiet)
+	}
+
+	// An empty block is a block nobody filled in, not a request for silence.
+	weak, quiet = thresholds(&config.Config{})
+	if weak != lowScorecard || quiet != quietAndWeak {
+		t.Errorf("an unset supply_chain block changed the thresholds to %.1f/%.1f", weak, quiet)
+	}
+
+	weak, quiet = thresholds(&config.Config{
+		SupplyChain: config.SupplyChainPolicy{MinScorecard: 2.5, QuietBelow: 3.5},
+	})
+	if weak != 2.5 || quiet != 3.5 {
+		t.Errorf("thresholds = %.1f/%.1f, want the configured pair", weak, quiet)
+	}
+}

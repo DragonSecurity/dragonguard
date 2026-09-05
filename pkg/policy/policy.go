@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"cel.dev/cel-go/cel"
 	"gopkg.in/yaml.v3"
@@ -494,6 +495,66 @@ func (e *Engine) LoadLicensePolicy(lp config.LicensePolicy) error {
 		return fmt.Errorf("build licence policy: %w", err)
 	}
 	return e.LoadRules("licenses (.dragon.yaml)", raw)
+}
+
+// LoadAcceptances compiles the project's standing exceptions into ordinary
+// rules, and reports the ones that have expired.
+//
+// Desugared like the licence policy, for the same reason: one evaluation path,
+// one place a decision can come from, and Source() renders the CEL so a
+// standing exception stays auditable rather than becoming a second hidden
+// mechanism.
+//
+// An expired acceptance is not compiled -- the finding counts again, which is
+// the whole point of writing a date -- but it is returned so the scan can say
+// so. Dropping it in silence would look identical to the acceptance never
+// having been written, and the first anyone would know is a posture drop with
+// no cause.
+func (e *Engine) LoadAcceptances(now time.Time, list []config.Acceptance) ([]string, error) {
+	var (
+		rules   []Rule
+		expired []string
+	)
+	for _, a := range list {
+		if until, ok := a.ExpiresOn(); ok && now.After(until.AddDate(0, 0, 1)) {
+			expired = append(expired, a.Label()+" (expired "+a.Expires+")")
+			continue
+		}
+
+		var match []string
+		if sel := strings.TrimSpace(a.Finding); sel != "" {
+			// Advisory ids, CVEs and engine rule ids all arrive here. Which of
+			// them a given string is depends on the engine that reported it,
+			// so match either place rather than making the author know.
+			match = append(match, fmt.Sprintf(
+				"(finding.rule_id == %q || %q in finding.cve)", sel, sel))
+		}
+		if sel := strings.TrimSpace(a.Package); sel != "" {
+			match = append(match, fmt.Sprintf("component.name == %q", sel))
+		}
+
+		rules = append(rules, Rule{
+			ID:          fmt.Sprintf("accept/%s", a.Label()),
+			Description: a.Reason + " -- approved by " + a.ApprovedBy,
+			Match:       Match{All: match},
+			Then: Effect{
+				Decision: DecisionAllow,
+				Exempt:   true,
+				Tags:     []string{"accepted"},
+			},
+		})
+	}
+	if len(rules) == 0 {
+		return expired, nil
+	}
+	raw, err := yaml.Marshal(rules)
+	if err != nil {
+		return expired, fmt.Errorf("build acceptance register: %w", err)
+	}
+	if err := e.LoadRules("accept (.dragon.yaml)", raw); err != nil {
+		return expired, err
+	}
+	return expired, nil
 }
 
 // activationFor builds the CEL input for a finding.

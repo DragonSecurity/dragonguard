@@ -293,3 +293,87 @@ func TestAScanRecordsTheBuildThatProducedIt(t *testing.T) {
 		t.Errorf("DragonVersion = %q, want the running build", res.DragonVersion)
 	}
 }
+
+// End to end: a finding nobody can fix should be able to stop dragging the
+// posture down, once somebody has said so in writing and signed their name.
+func TestAnAcceptedFindingStopsCountingAgainstThePosture(t *testing.T) {
+	dir := t.TempDir()
+	unfixable := finding.Finding{
+		Scanner: "osv", Category: finding.CategorySCA, RuleID: "GO-2026-5932",
+		Title: "openpgp is unmaintained", Severity: finding.SeverityMedium,
+		Threat:  finding.Threat{CVSS: 6.5},
+		Package: &finding.Package{Ecosystem: "go", Name: "golang.org/x/crypto", Version: "0.56.0"},
+	}
+	reg := regWith(&fakeScanner{name: "osv", available: true,
+		cats: []finding.Category{finding.CategorySCA}, findings: []finding.Finding{unfixable}})
+
+	before, err := Run(context.Background(), Options{
+		Dir: dir, Registry: reg, Offline: true,
+		Config: testConfig(t, dir, config.Asset{Name: "t", Environment: "production", Criticality: "medium"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testConfig(t, dir, config.Asset{Name: "t", Environment: "production", Criticality: "medium"})
+	cfg.Accept = []config.Acceptance{{
+		Finding:    "GO-2026-5932",
+		Reason:     "unmaintained upstream, no replacement; we do not use PGP",
+		ApprovedBy: "security",
+	}}
+	after, err := Run(context.Background(), Options{Dir: dir, Registry: reg, Offline: true, Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if after.Scorecard.Score <= before.Scorecard.Score {
+		t.Errorf("accepting the finding left the posture at %.0f (was %.0f); an acceptance must stop it counting",
+			after.Scorecard.Score, before.Scorecard.Score)
+	}
+	if after.Accepted.Applied != 1 || after.Accepted.Entries != 1 {
+		t.Errorf("acceptance report = %+v, want one entry applied once", after.Accepted)
+	}
+	// Still in the report. A suppression nobody can see is indistinguishable
+	// from a scanner that stopped looking.
+	if len(after.Findings) != 1 {
+		t.Fatalf("got %d findings; an accepted finding is carried, not deleted", len(after.Findings))
+	}
+	if after.Findings[0].Status != finding.StatusAccepted {
+		t.Errorf("status = %s, want accepted", after.Findings[0].Status)
+	}
+}
+
+// An expiry that has passed has to be visible. The finding counts again either
+// way; the difference is whether anyone can tell why the posture moved.
+func TestAnExpiredAcceptanceIsReportedRatherThanDroppedQuietly(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(t, dir, config.Asset{Name: "t", Environment: "production", Criticality: "medium"})
+	cfg.Accept = []config.Acceptance{{
+		Finding: "GO-2026-5932", Reason: "waiting on upstream", ApprovedBy: "security",
+		Expires: "2020-01-01",
+	}}
+
+	res, err := Run(context.Background(), Options{
+		Dir: dir, Config: cfg, Offline: true,
+		Registry: regWith(&fakeScanner{name: "osv", available: true,
+			cats: []finding.Category{finding.CategorySCA},
+			findings: []finding.Finding{{
+				Scanner: "osv", Category: finding.CategorySCA, RuleID: "GO-2026-5932",
+				Title: "openpgp is unmaintained", Severity: finding.SeverityMedium,
+				Package: &finding.Package{Ecosystem: "go", Name: "golang.org/x/crypto", Version: "0.56.0"},
+			}}}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(res.Accepted.Expired) != 1 {
+		t.Fatalf("expired = %v, want the lapsed entry named", res.Accepted.Expired)
+	}
+	if res.Findings[0].Status == finding.StatusAccepted {
+		t.Error("a lapsed acceptance must not still exempt its finding")
+	}
+	if res.Accepted.ExpiredNote() == "" {
+		t.Error("the scan must be able to say an acceptance lapsed")
+	}
+}

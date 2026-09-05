@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/DragonSecurity/dragonguard/pkg/config"
 	"github.com/DragonSecurity/dragonguard/pkg/depsdev"
 	"github.com/DragonSecurity/dragonguard/pkg/finding"
 	"github.com/DragonSecurity/dragonguard/pkg/scanner"
@@ -30,8 +31,9 @@ import (
 // Name is the stable engine identifier.
 const Name = "supplychain"
 
-// lowScorecard is the overall OpenSSF Scorecard below which a direct
-// dependency is worth a decision.
+// lowScorecard is the default overall OpenSSF Scorecard below which a direct
+// dependency is worth a decision. Overridable per project via
+// supply_chain.min_scorecard.
 //
 // Four rather than something higher because most of the ecosystem sits between
 // four and seven, and a threshold that flags half the dependency tree is a
@@ -39,9 +41,9 @@ const Name = "supplychain"
 // are failing at once, not that a project skipped one questionnaire.
 const lowScorecard = 4.0
 
-// quietAndWeak is the overall score below which prolonged inactivity is worth
-// reporting. Above it, no recent commits usually means finished rather than
-// abandoned.
+// quietAndWeak is the default overall score below which prolonged inactivity
+// is worth reporting. Above it, no recent commits usually means finished rather
+// than abandoned. Overridable via supply_chain.quiet_below.
 const quietAndWeak = 5.0
 
 // Why only deprecation gates.
@@ -102,6 +104,28 @@ func (s *Scanner) Available(_ context.Context, t scanner.Target) (bool, string) 
 	return true, ""
 }
 
+// thresholds resolves where this project draws its lines.
+//
+// A project knows its own dependencies better than a constant does: a shop
+// whose tree is mostly small finished libraries wants a lower bar, and one that
+// only takes well-run upstreams wants a higher one. Zero means unset rather
+// than "flag nothing", because an unset field in YAML is indistinguishable from
+// a field nobody wrote, and reading it as "silence this engine" would turn
+// adding an empty supply_chain block into a coverage gap.
+func thresholds(cfg *config.Config) (weakBelow, quietBelow float64) {
+	weakBelow, quietBelow = lowScorecard, quietAndWeak
+	if cfg == nil {
+		return
+	}
+	if v := cfg.SupplyChain.MinScorecard; v > 0 {
+		weakBelow = v
+	}
+	if v := cfg.SupplyChain.QuietBelow; v > 0 {
+		quietBelow = v
+	}
+	return
+}
+
 func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding, error) {
 	direct := directOf(t.Components)
 	if len(direct) == 0 {
@@ -113,6 +137,7 @@ func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding
 		conc = 8
 	}
 	sem := make(chan struct{}, conc)
+	weakBelow, quietBelow := thresholds(t.Config)
 	var (
 		mu  sync.Mutex
 		out []finding.Finding
@@ -134,7 +159,7 @@ func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			fs := s.assess(ctx, sys, n)
+			fs := s.assess(ctx, sys, n, weakBelow, quietBelow)
 			if len(fs) == 0 {
 				return
 			}
@@ -158,7 +183,9 @@ func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding
 }
 
 // assess produces the findings for one direct dependency.
-func (s *Scanner) assess(ctx context.Context, sys depsdev.System, n scanner.PackageNode) []finding.Finding {
+func (s *Scanner) assess(ctx context.Context, sys depsdev.System, n scanner.PackageNode,
+	weakBelow, quietBelow float64,
+) []finding.Finding {
 	var out []finding.Finding
 	pkg := &finding.Package{
 		Ecosystem: n.Ecosystem, Name: n.Name, Version: n.Version,
@@ -206,7 +233,7 @@ func (s *Scanner) assess(ctx context.Context, sys depsdev.System, n scanner.Pack
 	// weak too.
 	maintained, hasMaintained := checkScore(card, "Maintained")
 	quiet := hasMaintained && maintained == 0
-	weak := card.OverallScore > 0 && card.OverallScore < lowScorecard
+	weak := card.OverallScore > 0 && card.OverallScore < weakBelow
 
 	switch {
 	case weak:
@@ -234,7 +261,7 @@ func (s *Scanner) assess(ctx context.Context, sys depsdev.System, n scanner.Pack
 			Metadata:   map[string]any{"scorecard": card.OverallScore, "quiet": quiet},
 		})
 
-	case quiet && card.OverallScore > 0 && card.OverallScore < quietAndWeak:
+	case quiet && card.OverallScore > 0 && card.OverallScore < quietBelow:
 		out = append(out, finding.Finding{
 			Scanner:  Name,
 			Category: finding.CategorySupplyChain,
