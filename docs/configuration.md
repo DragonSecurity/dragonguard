@@ -16,8 +16,8 @@ them, uncommented and at the indentation they actually take, so there is one
 place to see both what exists and where it goes; a real config is much shorter.
 
 The top-level keys are `version`, `project`, `asset`, `engines`, `policies`,
-`baseline`, `default_branch`, `licenses`, `accept`, `ships`, `supply_chain`,
-`ignore`, `state_dir`, and the switches at the end. Anything not in that list belongs
+`baseline`, `default_branch`, `licenses`, `accept`, `ships`, `dast`,
+`supply_chain`, `ignore`, `state_dir`, and the switches at the end. Anything not in that list belongs
 inside one of them.
 
 ```yaml
@@ -136,6 +136,19 @@ accept:
     reason: Reviewed 2026-09; Scorecard measures process, not this library's risk.
     approved_by: the security team
     expires: 2027-03-01
+
+# ---------------------------------------------------------------------------
+# What the dynamic engines need to get past a login. One block for both: ZAP
+# and Schemathesis hit the same API and need the same credential, and express
+# it completely differently. See "Scanning behind a login" below.
+#
+# A dollar-brace reference reads the environment. Never write a credential
+# here directly -- this file is committed, and DragonGuard's own secret
+# scanner will flag it.
+# ---------------------------------------------------------------------------
+dast:
+  headers:
+    Authorization: "Bearer ${DAST_TOKEN}"
 
 # The packages this project actually ships, as `go list` patterns. Go is the
 # only ecosystem that does not record which dependencies are build-only, so
@@ -386,9 +399,10 @@ findings it was written for.
 | --- | --- |
 | `finding` | an advisory id (`GO-2026-5932`, `GHSA-…`), a CVE, or an engine rule id (`supply-chain/weak-upstream`) |
 | `package` | a dependency, as `name` or as the `name@version` the report prints |
+| `fingerprint` | **one specific finding**, in full or abbreviated to at least 8 characters |
 
-At least one is required. Give both and they must both match, which is how you
-accept one advisory *in one dependency* rather than everywhere it appears.
+At least one is required. Give several and they must all match, which is how
+you accept one advisory *in one dependency* rather than everywhere it appears.
 
 `finding` matches the rule id **or** any CVE on the finding, because which
 identifier a finding carries depends on the engine that reported it and you
@@ -406,6 +420,37 @@ should not have to know which one ran.
 Naming a version narrows the entry to it, which is usually right — a review was
 of what was there, and the next bump is worth seeing. Omit it to accept the
 dependency however it moves.
+
+### `fingerprint` accepts one finding, not a whole rule
+
+`finding:` matches a **rule**, which for a DAST result is almost never what
+somebody means. Accepting a schema check that is wrong about `/auth/login` also
+silences it on `/auth/{provider}/callback` — an endpoint nobody reviewed, whose
+next real failure now goes unreported.
+
+`fingerprint:` names the occurrence:
+
+```yaml
+- fingerprint: 09c9d574
+  expires: 2027-03-05
+  reason: >-
+    POST /auth/login answers 429 once an account passes ten failed attempts,
+    and the checker does not accept 429 for schema-compliant input. That is the
+    brute-force lockout, not the rate limiter.
+  approved_by: the security team
+```
+
+Abbreviations work, the way git taught everyone to expect, down to eight
+characters — below that a prefix stops naming one finding and starts matching
+whatever shares those digits.
+
+Fingerprints are stable across scans as long as the finding is: they survive
+the code moving down the file, reindentation, and the same advisory being
+reported by a different engine. They are in the JSON report:
+
+```sh
+dragon scan --format json | jq -r '.findings[] | "\(.fingerprint)  \(.title)"'
+```
 
 ### Which selector to use, and the trap in narrowing
 
@@ -522,6 +567,87 @@ An offline scan runs `go list` with `GOPROXY=off`. If the module cache is
 incomplete it fails and reports undetermined, which is the right outcome: a
 closure computed from half a module cache would mark real dependencies
 build-only, and that is the one mistake this must not make.
+
+## Scanning behind a login
+
+An unauthenticated DAST run against an authenticated API tests the login wall
+and nothing behind it. It comes back with a couple of header findings and a
+clean-looking score, which is worse than not running it: the coverage is
+missing and the report does not say so.
+
+Both engines need the same credential and neither would take one. Schemathesis
+took raw `args` and ZAP took nothing at all, and there was nowhere safe to put
+the value either way.
+
+```yaml
+dast:
+  headers:
+    Authorization: "Bearer ${DAST_TOKEN}"
+    X-Tenant: acme
+```
+
+One block for both engines, because they are pointed at the same running API.
+Each translates it into its own dialect: Schemathesis gets `-H`, and ZAP gets
+its Replacer add-on configured — six numbered properties per header, which is
+not something anybody should write by hand in a YAML file.
+
+The scan says what it sent, by name and never by value:
+
+```
+  ..  dast auth      2 header(s) sent with every request: Authorization, X-Tenant
+```
+
+### `${VAR}` reads the environment
+
+`.dragon.yaml` is committed. A credential written into it is a disclosed
+credential whatever the reason, and this tool's own secret scanner will flag it
+— correctly. So the file names the variable and CI carries the value.
+
+`${VAR}` works anywhere a value does, not only in `dast`.
+
+**An unset variable is an error, not an empty string.** `Authorization: Bearer `
+is a header that is present, wrong, and indistinguishable from an authenticated
+scan until somebody reads the findings and wonders why everything behind the
+login looks clean. An exported-but-empty variable counts as unset, because that
+is the usual shape of a secret that did not make it into CI. Every missing
+variable is named at once, rather than one deploy at a time.
+
+For a genuinely optional value, say so:
+
+```yaml
+    X-Debug: "${DEBUG_HEADER:-off}"
+    X-Optional: "${MAYBE:-}"
+```
+
+Write `$${` for a literal `${`.
+
+Substitution is textual and happens before the YAML is parsed, so a reference
+inside a **comment** is resolved like any other — an unset variable mentioned in
+passing will fail the load. Escape it, or write the name without the braces.
+
+### Where the secret actually goes
+
+ZAP's headers are written to a properties file beside the report and passed
+with `-configfile`, not as `-config` pairs on the command line. Both work; only
+one keeps a bearer token out of the process table, where anything else on the
+runner can read it out of `ps`.
+
+Schemathesis has no equivalent — `-H` is a command-line flag and that is the
+only interface it offers — so on a shared machine its header is visible in the
+process list for the duration of the run. Worth knowing before pointing it at
+production credentials.
+
+Neither value is ever written to a report, a scorecard or a SARIF file. Only
+the header names are.
+
+### `args` is still there
+
+`engines.zap.args` and `engines.schemathesis.args` are appended after the
+generated authentication, so an engine-specific flag can still be the last
+word. Appended, not substituted: adding one unrelated flag must not silently
+drop every header.
+
+(`engines.zap.args` was previously read by nothing at all. It works now.)
 
 ## Tuning the supply-chain engine
 

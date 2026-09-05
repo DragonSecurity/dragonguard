@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/DragonSecurity/dragonguard/pkg/finding"
@@ -91,7 +92,23 @@ func (z *ZAP) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding, er
 	}
 	defer cleanup()
 
-	args, bin, err := z.command(target, report)
+	// Authentication, written to a properties file beside the report rather
+	// than passed as -config pairs on the command line. Both work; only one
+	// keeps a bearer token out of the process table, where every other process
+	// on the runner can read it out of ps.
+	authFile, err := writeReplacerConfig(report, t)
+	if err != nil {
+		return nil, err
+	}
+
+	var extra []string
+	if t.Config != nil {
+		if ec, ok := t.Config.Engines["zap"]; ok {
+			extra = ec.Args
+		}
+	}
+
+	args, bin, err := z.command(target, report, authFile, extra)
 	if err != nil {
 		return nil, err
 	}
@@ -173,17 +190,67 @@ func lastMeaningfulLines(stream string, n int) string {
 	return strings.Join(kept, "; ")
 }
 
-func (z *ZAP) command(target, report string) (args []string, bin string, err error) {
+// writeReplacerConfig renders the configured DAST headers as a ZAP replacer
+// properties file next to the report, and returns its base name.
+//
+// ZAP has no flag for "send this header". It has a Replacer add-on configured
+// through six numbered properties per header, which is not something anybody
+// should be asked to write by hand in a YAML file -- so dast.headers is written
+// once and translated here.
+//
+// Returns "" when there is nothing to authenticate with, which is the ordinary
+// case for a public target.
+func writeReplacerConfig(report string, t scanner.Target) (string, error) {
+	if t.Config == nil {
+		return "", nil
+	}
+	headers := t.Config.DAST.SortedHeaders()
+	if len(headers) == 0 {
+		return "", nil
+	}
+
+	var b strings.Builder
+	for i, h := range headers {
+		fmt.Fprintf(&b, "replacer.full_list(%d).description=dragonguard-%d\n", i, i)
+		fmt.Fprintf(&b, "replacer.full_list(%d).enabled=true\n", i)
+		fmt.Fprintf(&b, "replacer.full_list(%d).matchtype=REQ_HEADER\n", i)
+		fmt.Fprintf(&b, "replacer.full_list(%d).matchstr=%s\n", i, h[0])
+		fmt.Fprintf(&b, "replacer.full_list(%d).regex=false\n", i)
+		fmt.Fprintf(&b, "replacer.full_list(%d).replacement=%s\n", i, h[1])
+	}
+
+	name := "zap-auth.prop"
+	path := filepath.Join(tempDir(report), name)
+	// 0600: the file holds the credential, and the directory is shared with a
+	// container whose whole job is to send hostile traffic.
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		return "", fmt.Errorf("write zap authentication config: %w", err)
+	}
+	return name, nil
+}
+
+func (z *ZAP) command(target, report, authFile string, extra []string) (args []string, bin string, err error) {
 	script := "zap-baseline.py"
 	if z.Full {
 		script = "zap-full-scan.py"
 	}
+	// -z carries options through to ZAP itself, which is the only route to the
+	// replacer configuration. Absent when nothing needs authenticating, so an
+	// unauthenticated scan is byte for byte the command it always was.
+	zopts := func(dir string) []string {
+		if authFile == "" {
+			return nil
+		}
+		return []string{"-z", "-configfile " + dir + "/" + authFile}
+	}
 	if p, err := exec.LookPath(script); err == nil {
-		return []string{"-t", target, "-J", report, "-I"}, p, nil
+		a := []string{"-t", target, "-J", report, "-I"}
+		a = append(a, zopts(tempDir(report))...)
+		return append(a, extra...), p, nil
 	}
 	if p, err := exec.LookPath("docker"); err == nil {
 		dir := "/zap/wrk"
-		return []string{
+		run := []string{
 			"run", "--rm",
 			// Only the report directory, never the parent of a file made by
 			// os.CreateTemp -- that is the system temp directory, and this
@@ -196,7 +263,9 @@ func (z *ZAP) command(target, report string) (args []string, bin string, err err
 			"-w", dir,
 			"ghcr.io/zaproxy/zaproxy:stable",
 			script, "-t", target, "-J", baseName(report), "-I",
-		}, p, nil
+		}
+		run = append(run, zopts(dir)...)
+		return append(run, extra...), p, nil
 	}
 	return nil, "", fmt.Errorf("neither %s nor docker is available", script)
 }

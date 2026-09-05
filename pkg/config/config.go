@@ -108,6 +108,9 @@ type Config struct {
 	// assert that everything ships.
 	Ships []string `yaml:"ships,omitempty" json:"ships,omitempty"`
 
+	// DAST carries what the dynamic engines need to get past a login.
+	DAST DASTPolicy `yaml:"dast,omitempty" json:"dast,omitempty"`
+
 	// SupplyChain tunes the upstream-posture engine.
 	SupplyChain SupplyChainPolicy `yaml:"supply_chain,omitempty" json:"supply_chain,omitempty"`
 
@@ -209,6 +212,15 @@ func Load(path, dir string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
+	// Before parsing, so a ${VAR} can appear anywhere a value can. Secrets
+	// reach the scan through the environment because .dragon.yaml is a
+	// committed file, and a credential in a repository is a disclosed
+	// credential whatever the reason for putting it there.
+	raw, err = interpolate(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+
 	c := Default()
 	if err := yaml.Unmarshal(raw, c); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
@@ -363,6 +375,13 @@ type Acceptance struct {
 	// Package selects by dependency name, for a decision about a dependency
 	// rather than about a particular advisory in it.
 	Package string `yaml:"package,omitempty" json:"package,omitempty"`
+	// Fingerprint selects one specific finding, in full or abbreviated.
+	//
+	// The narrowest selector there is, and the one a DAST finding usually
+	// needs: a rule id accepts every occurrence of that rule, so accepting a
+	// schema check that is wrong about one endpoint silences it on every other
+	// endpoint too. A fingerprint names the occurrence.
+	Fingerprint string `yaml:"fingerprint,omitempty" json:"fingerprint,omitempty"`
 	// Reason is why carrying this is acceptable. Required.
 	Reason string `yaml:"reason" json:"reason"`
 	// ApprovedBy names who decided. Required.
@@ -377,6 +396,12 @@ type Acceptance struct {
 	// reported rather than silently dropped.
 	Expires string `yaml:"expires,omitempty" json:"expires,omitempty"`
 }
+
+// minFingerprintPrefix is the shortest abbreviation that still names one
+// finding rather than a family of them.
+const minFingerprintPrefix = 8
+
+var fingerprintPattern = regexp.MustCompile(`^[0-9a-fA-F]+$`)
 
 // selectorPattern is narrow for the same reason licenseIDPattern is: these
 // strings are interpolated into CEL literals, so anything that could close the
@@ -402,20 +427,35 @@ func (a Acceptance) Label() string {
 		return a.Finding + " in " + a.Package
 	case a.Finding != "":
 		return a.Finding
-	default:
+	case a.Package != "":
 		return a.Package
+	default:
+		return "fingerprint " + a.Fingerprint
 	}
 }
 
 func validateAcceptances(list []Acceptance) error {
 	for i, a := range list {
 		f, pkg := strings.TrimSpace(a.Finding), strings.TrimSpace(a.Package)
-		if f == "" && pkg == "" {
-			return fmt.Errorf("accept[%d] selects nothing: give a finding or a package", i)
+		fp := strings.TrimSpace(a.Fingerprint)
+		if f == "" && pkg == "" && fp == "" {
+			return fmt.Errorf("accept[%d] selects nothing: give a finding, a package or a fingerprint", i)
 		}
 		for _, sel := range []struct{ name, val string }{{"finding", f}, {"package", pkg}} {
 			if sel.val != "" && !selectorPattern.MatchString(sel.val) {
 				return fmt.Errorf("accept[%d] %s %q is not a valid selector", i, sel.name, sel.val)
+			}
+		}
+		if fp != "" {
+			if !fingerprintPattern.MatchString(fp) {
+				return fmt.Errorf("accept[%d] fingerprint %q is not hexadecimal", i, a.Fingerprint)
+			}
+			// An abbreviation shorter than this stops naming one finding and
+			// starts matching whatever happens to share those digits, which
+			// would silence findings nobody decided about.
+			if len(fp) < minFingerprintPrefix {
+				return fmt.Errorf("accept[%d] fingerprint %q is too short; give at least %d characters",
+					i, a.Fingerprint, minFingerprintPrefix)
 			}
 		}
 		if strings.TrimSpace(a.Reason) == "" {
@@ -451,6 +491,71 @@ func validateShips(patterns []string) error {
 		}
 		if strings.HasPrefix(p, "-") {
 			return fmt.Errorf("ships[%d] %q looks like a flag, not a package pattern", i, p)
+		}
+	}
+	return nil
+}
+
+// DASTPolicy is what the dynamic engines need to reach past a login.
+//
+// One block for both, rather than a setting on each. ZAP and Schemathesis are
+// pointed at the same running API and need the same credential to see anything
+// behind its login -- and they express it completely differently, ZAP through
+// a replacer configuration and Schemathesis through a command-line flag.
+// Writing it once and letting each engine translate is the difference between
+// configuring authentication and learning two tools' dialects for it.
+//
+// Values almost always come from the environment:
+//
+//	dast:
+//	  headers:
+//	    Authorization: "Bearer ${DAST_TOKEN}"
+type DASTPolicy struct {
+	// Headers are sent with every request both engines make.
+	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+}
+
+// SortedHeaders returns the headers in a stable order.
+//
+// Stable because both engines put them on a command line, and a scan whose
+// arguments reshuffle between identical runs is one nobody can diff.
+func (p DASTPolicy) SortedHeaders() [][2]string {
+	if len(p.Headers) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(p.Headers))
+	for n := range p.Headers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([][2]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, [2]string{n, p.Headers[n]})
+	}
+	return out
+}
+
+// headerNamePattern is the HTTP token production, narrowed. A name outside it
+// cannot be a header, and letting one through would put arbitrary text on a
+// command line that a scanner builds.
+var headerNamePattern = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+._` + "`" + `|~^-]+$`)
+
+func (p DASTPolicy) validate() error {
+	for name, value := range p.Headers {
+		if !headerNamePattern.MatchString(name) {
+			return fmt.Errorf("dast.headers: %q is not a valid header name", name)
+		}
+		// A value interpolated from the environment is not trusted input, and a
+		// newline in one is request splitting: everything after it becomes a
+		// header, or a second request, in whichever engine is least careful.
+		if strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("dast.headers[%s] contains a newline", name)
+		}
+		if strings.TrimSpace(value) == "" {
+			// Almost always an unset ${VAR:-} that nobody meant to leave empty.
+			// Sending "Authorization: " is worse than not sending it: the scan
+			// looks authenticated and is not.
+			return fmt.Errorf("dast.headers[%s] is empty; remove it or set the value it interpolates", name)
 		}
 	}
 	return nil
@@ -543,6 +648,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := validateShips(c.Ships); err != nil {
+		return err
+	}
+	if err := c.DAST.validate(); err != nil {
 		return err
 	}
 	return c.SupplyChain.validate()
