@@ -621,6 +621,20 @@ For a genuinely optional value, say so:
 
 Write `$${` for a literal `${`.
 
+**Whose environment answers matters.** `dragon scan` resolves against the
+process environment, which is right on the command line: you wrote the config
+and you own the secrets. A *server* reading a `.dragon.yaml` out of a
+repository it did not write must not do that — resolving `${VAR}` against its
+own environment would hand any repository it can clone a read over every secret
+it holds, and DAST configuration is an egress primitive in the same file. The
+hosted scanner therefore resolves only variables scoped to that project, and
+reports anything else as unset.
+
+The same caution applies to your own CI if untrusted contributors can edit
+`.dragon.yaml`: a reference decides *which* variable is read and where it is
+sent. Fork pull requests do not receive secrets by default, which is what makes
+that safe — do not undo it.
+
 Substitution is textual and happens before the YAML is parsed, so a reference
 inside a **comment** is resolved like any other — an unset variable mentioned in
 passing will fail the load. Escape it, or write the name without the braces.
