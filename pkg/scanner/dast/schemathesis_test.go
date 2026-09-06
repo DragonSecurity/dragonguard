@@ -65,3 +65,52 @@ func TestSchemathesisPassesConfiguredArgsThrough(t *testing.T) {
 		t.Errorf("configured args were dropped: %v", args)
 	}
 }
+
+// The worst thing a DAST engine can do is report a target it never reached as
+// clean. Schemathesis exits non-zero both when it finds failures and when it
+// cannot connect, and the adapter discards the exit code on purpose -- so the
+// only signal left is the FatalError event, and skipping it turned an
+// unreachable API into a green API dimension.
+func TestAnUnreachableTargetIsAFailureNotACleanRun(t *testing.T) {
+	report := `{"Initialize":{}}
+{"LoadingStarted":{}}
+{"FatalError":{"exception":{"type":"LoaderError","message":"Connection failed"}}}
+`
+	_, err := parseSchemathesisReport([]byte(report), "http://localhost:9")
+	if err == nil {
+		t.Fatal("a run that never reached the target reported success")
+	}
+	if !strings.Contains(err.Error(), "Connection failed") {
+		t.Errorf("the failure should say why; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "LoaderError") {
+		t.Errorf("the failure should carry the exception type; got %v", err)
+	}
+}
+
+// And the other direction: a run that did reach the target and genuinely found
+// nothing is a clean result, not an error. Conflating the two would make every
+// healthy API look broken.
+func TestAScenarioThatRanAndPassedIsStillClean(t *testing.T) {
+	report := `{"Initialize":{}}
+{"ScenarioFinished":{"status":"success","phase":"examples","recorder":{"label":"GET /health","checks":{},"cases":{},"interactions":{}}}}
+`
+	got, err := parseSchemathesisReport([]byte(report), "http://localhost:8080")
+	if err != nil {
+		t.Fatalf("a clean run must not be an error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d findings from a passing run", len(got))
+	}
+}
+
+// A fatal error after real work is a partial run, not a run that never
+// started. Its findings are worth keeping.
+func TestAFatalErrorAfterScenariosKeepsWhatWasFound(t *testing.T) {
+	report := `{"ScenarioFinished":{"status":"success","phase":"examples","recorder":{"label":"GET /a","checks":{},"cases":{},"interactions":{}}}}
+{"FatalError":{"exception":{"type":"Interrupted","message":"stopped"}}}
+`
+	if _, err := parseSchemathesisReport([]byte(report), "http://localhost:8080"); err != nil {
+		t.Errorf("a fatal error after work should not discard the run: %v", err)
+	}
+}

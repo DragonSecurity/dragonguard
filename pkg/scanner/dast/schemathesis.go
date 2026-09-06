@@ -184,6 +184,23 @@ func (s *Schemathesis) command(schema, baseURL, report string, extra []string) (
 // event name. Only ScenarioFinished carries results, so the rest are skipped
 // rather than modelled.
 type schemathesisEvent struct {
+	// FatalError is emitted when the run could not proceed at all -- the
+	// schema would not load, the target refused the connection.
+	//
+	// Modelled because ignoring it is the worst outcome this adapter can
+	// produce. The exit code is deliberately discarded (non-zero is how
+	// schemathesis reports findings), and every event that is not a finished
+	// scenario used to be skipped, so a run that never reached the target
+	// emitted no scenarios, parsed to no findings, and was reported as a clean
+	// API dimension. A DAST engine that cannot reach its target must not say
+	// the target is fine.
+	FatalError *struct {
+		Exception struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"exception"`
+	} `json:"FatalError"`
+
 	ScenarioFinished *struct {
 		Status   string `json:"status"`
 		Phase    string `json:"phase"`
@@ -225,9 +242,11 @@ func parseSchemathesisReport(data []byte, baseURL string) ([]finding.Finding, er
 	// would bury a real server error under a hundred copies of itself.
 	type key struct{ check, operation, failureType string }
 	var (
-		order []key
-		byKey = map[key]*finding.Finding{}
-		seen  = map[key]int{}
+		order     []key
+		byKey     = map[key]*finding.Finding{}
+		seen      = map[key]int{}
+		fatal     string
+		scenarios int
 	)
 
 	sc := bufio.NewScanner(bytes.NewReader(data))
@@ -246,9 +265,17 @@ func parseSchemathesisReport(data []byte, baseURL string) ([]finding.Finding, er
 			// A single malformed event must not discard the rest of a run.
 			continue
 		}
+		if ev.FatalError != nil {
+			fatal = ev.FatalError.Exception.Message
+			if t := ev.FatalError.Exception.Type; t != "" {
+				fatal = t + ": " + fatal
+			}
+			continue
+		}
 		if ev.ScenarioFinished == nil {
 			continue
 		}
+		scenarios++
 		rec := ev.ScenarioFinished.Recorder
 
 		for caseID, checks := range rec.Checks {
@@ -321,6 +348,15 @@ func parseSchemathesisReport(data []byte, baseURL string) ([]finding.Finding, er
 	out := make([]finding.Finding, 0, len(order))
 	for _, k := range order {
 		out = append(out, *byKey[k])
+	}
+	// A run that never got started is not a run that found nothing.
+	//
+	// Reported as an engine failure so the API dimension shows unassessed
+	// rather than clean: the difference between "the target has no problems"
+	// and "the target was never reached" is the whole value of the scan, and
+	// only one of them is safe to act on.
+	if fatal != "" && scenarios == 0 {
+		return nil, fmt.Errorf("schemathesis never reached the target: %s", fatal)
 	}
 	return out, nil
 }
