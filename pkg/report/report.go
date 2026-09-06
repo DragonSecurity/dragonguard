@@ -66,6 +66,11 @@ type Result struct {
 	// Unrecognized names configuration keys this build read and did not
 	// understand -- a typo, or a block written for a newer release.
 	Unrecognized []string `json:"unrecognized_config,omitempty"`
+	// DroppedSettings names configuration removed because a variable it
+	// referenced could not be resolved.
+	DroppedSettings []string `json:"dropped_settings,omitempty"`
+	// UnresolvedVars names the variables that were not available.
+	UnresolvedVars []string `json:"unresolved_vars,omitempty"`
 	// DASTAuthHeaders names the headers the dynamic engines were given.
 	//
 	// Names only. The values are credentials, and a report is a file that gets
@@ -290,6 +295,15 @@ func Text(w io.Writer, r *Result, opts Options) error {
 		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(yellow, "!!"), "config",
 			p.c(yellow, fmt.Sprintf("%d setting(s) this build does not understand were ignored: %s",
 				len(r.Unrecognized), strings.Join(r.Unrecognized, ", "))))
+	}
+	if len(r.DroppedSettings) > 0 {
+		// Not dim. A setting in the file and not in effect is the failure this
+		// line exists to prevent, and an unauthenticated DAST run that looks
+		// like an authenticated one is the specific way it hurts.
+		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(yellow, "!!"), "config",
+			p.c(yellow, fmt.Sprintf("%d setting(s) dropped for want of %s: %s",
+				len(r.DroppedSettings), strings.Join(r.UnresolvedVars, ", "),
+				strings.Join(r.DroppedSettings, ", "))))
 	}
 	if len(r.DASTAuthHeaders) > 0 {
 		fmt.Fprintf(w, "  %s  %-14s %s\n", p.c(dim, ".."), "dast auth",
