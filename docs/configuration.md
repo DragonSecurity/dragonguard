@@ -605,12 +605,26 @@ credential whatever the reason, and this tool's own secret scanner will flag it
 
 `${VAR}` works anywhere a value does, not only in `dast`.
 
-**An unset variable is an error, not an empty string.** `Authorization: Bearer `
-is a header that is present, wrong, and indistinguishable from an authenticated
-scan until somebody reads the findings and wonders why everything behind the
-login looks clean. An exported-but-empty variable counts as unset, because that
-is the usual shape of a secret that did not make it into CI. Every missing
-variable is named at once, rather than one deploy at a time.
+**An unset variable removes the setting; it never empties it.**
+`Authorization: Bearer ` is a header that is present, wrong, and
+indistinguishable from an authenticated scan until somebody reads the findings
+and wonders why everything behind the login looks clean. So the header is not
+sent at all, and the removal is reported:
+
+```
+  !!  config         1 setting(s) dropped for want of DAST_TOKEN: dast.headers.Authorization
+```
+
+**Only that setting.** The rest of the file still applies. Rejecting the whole
+document was the first design, and it was wrong in a way that took a while to
+show: a missing DAST credential threw away the engine list and the `ignore:`
+list too, so the scan quietly widened and then blocked the gate on the false
+positives the discarded ignore list existed to suppress. Losing one header is a
+small, visible gap; losing the file is a large, invisible one.
+
+An exported-but-empty variable counts as unset, because that is the usual shape
+of a secret that did not make it into CI. Every missing variable is named at
+once, rather than one deploy at a time.
 
 For a genuinely optional value, say so:
 

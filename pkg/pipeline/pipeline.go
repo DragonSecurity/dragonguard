@@ -115,6 +115,9 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 	if note := cfg.UnrecognizedNote(); note != "" {
 		progress(note)
 	}
+	if note := cfg.DroppedNote(); note != "" {
+		progress(note)
+	}
 
 	// --- scan ---
 	reg := opts.Registry
@@ -398,10 +401,12 @@ func Run(ctx context.Context, opts Options) (*report.Result, error) {
 	}
 
 	return &report.Result{
-		DragonVersion: report.Version,
-		Ignored:       ignoreReport,
-		Excluded:      excludedReport,
-		Unrecognized:  cfg.Unrecognized,
+		DragonVersion:   report.Version,
+		Ignored:         ignoreReport,
+		Excluded:        excludedReport,
+		Unrecognized:    cfg.Unrecognized,
+		DroppedSettings: cfg.Dropped,
+		UnresolvedVars:  cfg.Unresolved,
 		// Names only: the values are credentials and this struct is
 		// serialized into artifacts people share.
 		DASTAuthHeaders: dastHeaderNames(cfg),

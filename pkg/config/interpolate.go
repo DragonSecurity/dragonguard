@@ -91,6 +91,77 @@ func interpolateNode(n *yaml.Node, lookup Lookup, missing map[string]bool) {
 	}
 }
 
+// unresolvedMark is left in a value whose reference nothing could resolve, so
+// the setting carrying it can be found and removed after the walk.
+//
+// A byte sequence no YAML author writes by accident, because anything that
+// survived into the parsed document would then be silently deleted.
+const unresolvedMark = "\x00dragonguard-unresolved\x00"
+
+// prune removes the settings whose values could not be resolved, and returns
+// the paths it removed.
+//
+// Removing the setting rather than failing the file is the whole point. An
+// unresolvable variable used to reject the entire configuration, which meant a
+// scan lost the engine selection and the ignore list along with it -- so a
+// missing DAST credential silently widened the scan and then blocked the gate
+// on the false positives that the discarded ignore list existed to suppress.
+// Losing one header is a small, visible gap; losing the file is a large,
+// invisible one.
+func prune(n *yaml.Node, path string) []string {
+	if n == nil {
+		return nil
+	}
+	var dropped []string
+
+	switch n.Kind {
+	case yaml.MappingNode:
+		kept := make([]*yaml.Node, 0, len(n.Content))
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			key, val := n.Content[i], n.Content[i+1]
+			child := key.Value
+			if path != "" {
+				child = path + "." + key.Value
+			}
+			if marked(val) {
+				dropped = append(dropped, child)
+				continue
+			}
+			dropped = append(dropped, prune(val, child)...)
+			kept = append(kept, key, val)
+		}
+		n.Content = kept
+
+	case yaml.SequenceNode:
+		kept := make([]*yaml.Node, 0, len(n.Content))
+		for i, item := range n.Content {
+			if marked(item) {
+				dropped = append(dropped, fmt.Sprintf("%s[%d]", path, i))
+				continue
+			}
+			dropped = append(dropped, prune(item, fmt.Sprintf("%s[%d]", path, i))...)
+			kept = append(kept, item)
+		}
+		n.Content = kept
+
+	default:
+		for _, c := range n.Content {
+			dropped = append(dropped, prune(c, path)...)
+		}
+	}
+	return dropped
+}
+
+// marked reports whether this node is itself an unresolved value.
+//
+// Scalars only, deliberately. Asking whether anything *under* a node is
+// unresolved would remove the nearest enclosing block instead of the setting:
+// one header that could not be resolved took the whole dast: section with it,
+// which is the same over-reach as rejecting the file, one level down.
+func marked(n *yaml.Node) bool {
+	return n != nil && n.Kind == yaml.ScalarNode && strings.Contains(n.Value, unresolvedMark)
+}
+
 // substitute resolves the references in one scalar, recording any it cannot.
 func substitute(in string, lookup Lookup, missing map[string]bool) string {
 	if !strings.Contains(in, "${") && !strings.Contains(in, escapedDollar) {
@@ -110,13 +181,13 @@ func substitute(in string, lookup Lookup, missing map[string]bool) string {
 			return fallback
 		}
 		missing[name] = true
-		return ref
+		return unresolvedMark
 	})
 	return strings.ReplaceAll(out, placeholder, "${")
 }
 
-// missingError renders the refusal for references nothing could resolve.
-func missingError(missing map[string]bool) error {
+// sortedNames returns the recorded variable names in a stable order.
+func sortedNames(missing map[string]bool) []string {
 	if len(missing) == 0 {
 		return nil
 	}
@@ -125,10 +196,7 @@ func missingError(missing map[string]bool) error {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	return fmt.Errorf(
-		"%s referenced by the configuration but not set in the environment "+
-			"(write ${%s:-} if it is genuinely optional)",
-		strings.Join(names, ", "), names[0])
+	return names
 }
 
 // interpolate replaces ${VAR} references using the supplied lookup.

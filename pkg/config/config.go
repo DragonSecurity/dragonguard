@@ -167,6 +167,15 @@ type Config struct {
 	// Not serialized.
 	Unrecognized []string `yaml:"-" json:"-"`
 
+	// Dropped names the settings removed because a variable they referenced
+	// could not be resolved, and Unresolved names the variables.
+	//
+	// Reported rather than silent, for the same reason every other filter here
+	// reports itself: a setting that is in the file and not in effect is
+	// indistinguishable from one that does not work. Not serialized.
+	Dropped    []string `yaml:"-" json:"-"`
+	Unresolved []string `yaml:"-" json:"-"`
+
 	// Dir is the directory the config was loaded from. Not serialized.
 	Dir string `yaml:"-" json:"-"`
 	// Path is where the config was loaded from, empty if defaults were used.
@@ -242,9 +251,14 @@ func LoadWithEnv(path, dir string, lookup Lookup) (*Config, error) {
 	}
 	missing := map[string]bool{}
 	interpolateNode(&doc, lookup, missing)
-	if err := missingError(missing); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
+	// A setting whose reference nothing could resolve is removed, not fatal.
+	//
+	// Rejecting the file took the engine selection and the ignore list with
+	// it, so a missing DAST credential silently widened the scan and then
+	// blocked the gate on the very false positives the discarded ignore list
+	// existed to suppress. Losing one header is a small and visible gap;
+	// losing the file is a large and invisible one.
+	dropped := prune(&doc, "")
 
 	c := Default()
 	// An empty document decodes to nothing rather than erroring, which is what
@@ -259,6 +273,8 @@ func LoadWithEnv(path, dir string, lookup Lookup) (*Config, error) {
 		abs = path
 	}
 	c.Unrecognized = unrecognizedKeys(raw)
+	c.Dropped = dropped
+	c.Unresolved = sortedNames(missing)
 	c.Path = abs
 	c.Dir = filepath.Dir(abs)
 	if c.Asset.Name == "" {
@@ -317,6 +333,16 @@ func fieldFromTypeError(msg string) string {
 		return ""
 	}
 	return m[1]
+}
+
+// DroppedNote renders a one-line summary of settings removed for want of a
+// variable, or empty when nothing was.
+func (c *Config) DroppedNote() string {
+	if len(c.Dropped) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d setting(s) dropped for want of %s: %s",
+		len(c.Dropped), strings.Join(c.Unresolved, ", "), strings.Join(c.Dropped, ", "))
 }
 
 // UnrecognizedNote renders a one-line summary, or empty when everything in the
