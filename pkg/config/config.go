@@ -193,7 +193,21 @@ func Default() *Config {
 
 // Load reads a config from an explicit path, or discovers one by walking up
 // from dir. A project with no config gets Default rather than an error.
+// Load reads a configuration, resolving ${VAR} against the process environment.
+//
+// Correct for the command line, where the person running it owns both the
+// config and the secrets. A server reading a repository it did not write must
+// use LoadWithEnv and supply a source scoped to what that repository is
+// entitled to see -- see Lookup.
 func Load(path, dir string) (*Config, error) {
+	return LoadWithEnv(path, dir, OSEnv)
+}
+
+// LoadWithEnv reads a configuration, resolving ${VAR} through lookup.
+//
+// A nil lookup resolves nothing, so a caller that forgets to decide gets the
+// safe answer rather than the process environment.
+func LoadWithEnv(path, dir string, lookup Lookup) (*Config, error) {
 	if path == "" {
 		path = discover(dir)
 	}
@@ -216,7 +230,7 @@ func Load(path, dir string) (*Config, error) {
 	// reach the scan through the environment because .dragon.yaml is a
 	// committed file, and a credential in a repository is a disclosed
 	// credential whatever the reason for putting it there.
-	raw, err = interpolate(raw)
+	raw, err = interpolate(raw, lookup)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}

