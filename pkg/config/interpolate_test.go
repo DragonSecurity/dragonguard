@@ -212,3 +212,72 @@ dast:
 		t.Error("Load should still resolve against the process environment")
 	}
 }
+
+// Parking configuration behind a # is the most ordinary thing anybody does
+// with it. Resolving references over the raw text meant a commented-out block
+// still resolved, so a variable nothing was going to read failed the whole
+// scan -- and the block could not be commented out to make it stop.
+func TestAReferenceInACommentIsNotAReference(t *testing.T) {
+	os.Unsetenv("DG_TEST_PARKED")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".dragon.yaml")
+	if err := os.WriteFile(path, []byte(`version: dragonguard/v1
+project: example
+
+# Parked until the dynamic engines are turned on:
+#
+# dast:
+#   headers:
+#     X-API-Key: "${DG_TEST_PARKED}"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path, dir)
+	if err != nil {
+		t.Fatalf("a commented-out reference failed the load: %v", err)
+	}
+	if len(cfg.DAST.Headers) != 0 {
+		t.Errorf("a commented block was applied: %v", cfg.DAST.Headers)
+	}
+}
+
+// A "#" inside a quoted value is not a comment, and a comment-stripping pass
+// is exactly what would get that wrong. Walking parsed values cannot.
+func TestAHashInsideAValueIsNotAComment(t *testing.T) {
+	t.Setenv("DG_TEST_FRAGMENT", "resolved")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".dragon.yaml")
+	if err := os.WriteFile(path, []byte(`version: dragonguard/v1
+project: example
+dast:
+  headers:
+    X-Note: "value with # a hash and ${DG_TEST_FRAGMENT}"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.DAST.Headers["X-Note"]
+	if got != "value with # a hash and resolved" {
+		t.Errorf("header = %q; the hash is part of the value and the reference still resolves", got)
+	}
+}
+
+// A file holding nothing but comments is a valid configuration that sets
+// nothing, not a parse failure.
+func TestAFileOfOnlyCommentsLoads(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".dragon.yaml")
+	if err := os.WriteFile(path, []byte("# nothing here yet\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path, dir); err != nil {
+		t.Errorf("a comments-only config failed to load: %v", err)
+	}
+}

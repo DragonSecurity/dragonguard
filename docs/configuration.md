@@ -635,9 +635,10 @@ The same caution applies to your own CI if untrusted contributors can edit
 sent. Fork pull requests do not receive secrets by default, which is what makes
 that safe — do not undo it.
 
-Substitution is textual and happens before the YAML is parsed, so a reference
-inside a **comment** is resolved like any other — an unset variable mentioned in
-passing will fail the load. Escape it, or write the name without the braces.
+Substitution happens on parsed **values**, so a reference inside a comment is
+not a reference: a block carrying one can be commented out, which is the
+ordinary way to park configuration. A `#` inside a quoted value stays part of
+the value.
 
 ### Where the secret actually goes
 

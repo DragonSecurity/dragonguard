@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+
+	"gopkg.in/yaml.v3"
 	"regexp"
 	"sort"
 	"strings"
@@ -62,6 +64,72 @@ func OSEnv(name string) (string, bool) { return os.LookupEnv(name) }
 // unset, which is the safe direction: a configuration that wanted a variable it
 // may not have fails loudly instead of quietly being given one.
 func NoEnv(string) (string, bool) { return "", false }
+
+// interpolateNode resolves references in a parsed document rather than in its
+// text.
+//
+// Substituting on raw bytes was simpler and wrong in a way that only shows up
+// in use: a reference inside a YAML comment is still text, so it still
+// resolved, so a block could not be commented out. Parking configuration behind
+// a # is the most ordinary thing anyone does with it, and doing so failed the
+// entire scan over a variable that nothing was going to read.
+//
+// Walking the node tree fixes that by construction. Comments live beside
+// scalars rather than inside their values, so they are simply never visited,
+// and there is no comment-stripping pass to get subtly wrong on a "#" inside a
+// quoted string.
+func interpolateNode(n *yaml.Node, lookup Lookup, missing map[string]bool) {
+	if n == nil {
+		return
+	}
+	if n.Kind == yaml.ScalarNode {
+		n.Value = substitute(n.Value, lookup, missing)
+		return
+	}
+	for _, c := range n.Content {
+		interpolateNode(c, lookup, missing)
+	}
+}
+
+// substitute resolves the references in one scalar, recording any it cannot.
+func substitute(in string, lookup Lookup, missing map[string]bool) string {
+	if !strings.Contains(in, "${") && !strings.Contains(in, escapedDollar) {
+		return in
+	}
+	const placeholder = "\x00dragonguard-literal-dollar-brace\x00"
+	text := strings.ReplaceAll(in, escapedDollar, placeholder)
+
+	out := envReference.ReplaceAllStringFunc(text, func(ref string) string {
+		m := envReference.FindStringSubmatch(ref)
+		name, hasDefault, fallback := m[1], m[2] != "", m[3]
+
+		if v, ok := lookup(name); ok && v != "" {
+			return v
+		}
+		if hasDefault {
+			return fallback
+		}
+		missing[name] = true
+		return ref
+	})
+	return strings.ReplaceAll(out, placeholder, "${")
+}
+
+// missingError renders the refusal for references nothing could resolve.
+func missingError(missing map[string]bool) error {
+	if len(missing) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(missing))
+	for n := range missing {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return fmt.Errorf(
+		"%s referenced by the configuration but not set in the environment "+
+			"(write ${%s:-} if it is genuinely optional)",
+		strings.Join(names, ", "), names[0])
+}
 
 // interpolate replaces ${VAR} references using the supplied lookup.
 //
