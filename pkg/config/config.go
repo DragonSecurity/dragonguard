@@ -226,18 +226,33 @@ func LoadWithEnv(path, dir string, lookup Lookup) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
-	// Before parsing, so a ${VAR} can appear anywhere a value can. Secrets
-	// reach the scan through the environment because .dragon.yaml is a
+	// Parse first, then resolve references in the values the parse produced.
+	//
+	// Secrets reach the scan through the environment because .dragon.yaml is a
 	// committed file, and a credential in a repository is a disclosed
-	// credential whatever the reason for putting it there.
-	raw, err = interpolate(raw, lookup)
-	if err != nil {
+	// credential whatever the reason for putting it there. Resolving after the
+	// parse rather than over the text is what lets a block carrying a reference
+	// be commented out -- a comment is not a value, so it is never visited.
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if lookup == nil {
+		lookup = NoEnv
+	}
+	missing := map[string]bool{}
+	interpolateNode(&doc, lookup, missing)
+	if err := missingError(missing); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 
 	c := Default()
-	if err := yaml.Unmarshal(raw, c); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	// An empty document decodes to nothing rather than erroring, which is what
+	// a .dragon.yaml holding only comments should do.
+	if len(doc.Content) > 0 {
+		if err := doc.Decode(c); err != nil {
+			return nil, fmt.Errorf("parse config %s: %w", path, err)
+		}
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
