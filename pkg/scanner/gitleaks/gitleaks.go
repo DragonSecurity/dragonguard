@@ -64,7 +64,76 @@ type leak struct {
 	Secret      string   `json:"Secret"`
 }
 
+// Scan reads the working tree, and the repository's history as well when there
+// is one.
+//
+// Both, because they are different questions and gitleaks answers only the one
+// it is asked. Given a .git it walks commit diffs and never opens the working
+// tree; given none it reads the tree. The adapter used to pick between them on
+// whether .git happened to exist, which made coverage a property of the
+// checkout rather than of the project: the same commit scanned locally saw
+// history only, and scanned from a hosted clone saw the tree only.
+//
+// The tree is the half that must always run. It is what the gate is about --
+// the files this commit would ship -- and in a repository it was exactly the
+// half being skipped, so a credential written and not yet committed was
+// invisible to the scan standing between it and the remote.
+//
+// History is kept on top of it rather than instead of it. A credential that
+// was committed and then deleted is still disclosed, and only the history pass
+// can see it.
+// RulesFor reports what this engine covered, because the coverage is not
+// obvious and was silently wrong for as long as it depended on the checkout.
+func (s *Scanner) RulesFor(t scanner.Target) []string {
+	if isGitRepo(t.Dir) {
+		return []string{"working tree", "git history"}
+	}
+	return []string{"working tree (no repository, so no history)"}
+}
+
 func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding, error) {
+	out, err := s.scanPass(ctx, t, true)
+	if err != nil {
+		return nil, err
+	}
+	if !isGitRepo(t.Dir) {
+		return out, nil
+	}
+
+	history, err := s.scanPass(ctx, t, false)
+	if err != nil {
+		// The tree is already scanned, and losing history is a smaller gap
+		// than losing everything. Reported through the finding count rather
+		// than by failing the engine on a repository that is merely odd --
+		// a shallow clone, a corrupt object, an unborn branch.
+		return out, nil
+	}
+	return mergeLeaks(out, history), nil
+}
+
+// mergeLeaks joins the two passes, dropping the duplicates a tracked file
+// produces by appearing in both.
+func mergeLeaks(tree, history []finding.Finding) []finding.Finding {
+	type key struct {
+		rule, file string
+		line       int
+	}
+	seen := make(map[key]bool, len(tree))
+	for _, f := range tree {
+		seen[key{f.RuleID, f.Location.File, f.Location.StartLine}] = true
+	}
+	for _, f := range history {
+		k := key{f.RuleID, f.Location.File, f.Location.StartLine}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		tree = append(tree, f)
+	}
+	return tree
+}
+
+func (s *Scanner) scanPass(ctx context.Context, t scanner.Target, workingTree bool) ([]finding.Finding, error) {
 	tmp, err := os.CreateTemp("", "dragon-gitleaks-*.json")
 	if err != nil {
 		return nil, fmt.Errorf("create temp report: %w", err)
@@ -94,9 +163,7 @@ func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding
 		// Never write a live credential to our own report.
 		args = append(args, "--redact")
 	}
-	// Scanning history needs a repository. Outside one, fall back to the
-	// working tree rather than failing the whole engine.
-	if !isGitRepo(t.Dir) {
+	if workingTree {
 		args = append(args, "--no-git")
 	}
 	if t.Config != nil {
@@ -125,7 +192,7 @@ func (s *Scanner) Scan(ctx context.Context, t scanner.Target) ([]finding.Finding
 		return nil, fmt.Errorf("parse gitleaks report: %w", err)
 	}
 
-	inHistory := isGitRepo(t.Dir)
+	inHistory := !workingTree
 	out := make([]finding.Finding, 0, len(leaks))
 	var candidates []verify.Candidate
 

@@ -580,6 +580,33 @@ incomplete it fails and reports undetermined, which is the right outcome: a
 closure computed from half a module cache would mark real dependencies
 build-only, and that is the one mistake this must not make.
 
+## What the secret scanner actually reads
+
+Both the working tree and the repository's history, and it says which on the
+evidence line:
+
+```
+  OK  gitleaks       3 findings in 806ms
+  ..                 rules: working tree, git history
+```
+
+They are different questions, and gitleaks answers only the one it is asked.
+Given a `.git` it walks commit diffs and **never opens the working tree**; given
+none it reads the tree. Choosing between them on whether `.git` happens to
+exist made coverage a property of the checkout rather than of the project — the
+same commit scanned on a developer's machine saw history only, and scanned from
+a hosted clone with no `.git` saw the tree only. The two disagreed about the
+same code and neither said so.
+
+The tree is the half that must always run: it is what the gate is about, the
+files this commit would ship. In a repository that was precisely the half being
+skipped, so a credential written and not yet committed was invisible to the
+scan standing between it and the remote.
+
+History runs on top of it, because a credential that was committed and later
+deleted is still disclosed and only that pass can see it. A secret in a tracked
+file appears in both and is reported once.
+
 ## Scanning behind a login
 
 An unauthenticated DAST run against an authenticated API tests the login wall
