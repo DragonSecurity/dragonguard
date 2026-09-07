@@ -551,6 +551,18 @@ to a half of the module list out of production scope.
 dependencies are shipped, because the list says what this project ships rather
 than encoding an opinion about what a directory called `tools` means.
 
+### It is computed for one platform
+
+The closure is the one the scan itself resolves, so it is `GOOS`- and
+`GOARCH`-specific. A dependency linked only on a platform you release for but
+do not scan on reads as build-only — cobra's `mousetrap` is the usual example,
+imported only on Windows.
+
+That is correct when you do not ship that platform, and wrong when you do. If
+you release for Windows from a Linux runner, either scan on the platform you
+ship or treat the Windows-only entries as a known gap; a dependency that only
+appears in one build is still in that build.
+
 ### When it cannot be determined
 
 Leave `ships:` unset and the scan says so, on a `ships` line in the evidence

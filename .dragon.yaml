@@ -23,6 +23,27 @@ engines:
   gitleaks:
     enabled: true
 
+# What this module ships.
+#
+# Both halves, because it is a binary and a library. ./cmd/... is the dragon
+# CLI; ./pkg/... is the surface other projects import -- dragonguard-platform
+# runs this as its scanning engine -- so a dependency reachable only from a
+# package there still reaches production, somebody else's.
+#
+# Declaring the binary alone would be the mistake this setting exists to
+# prevent, one level up: a package that ships to consumers would be scored as
+# build-only because no local main happens to link it.
+#
+# One of the twelve is build-only: mousetrap, which cobra links only on
+# Windows, and .goreleaser.yml builds linux and darwin. That is the right
+# answer for this project and it is worth knowing why -- the closure is
+# computed for the platform the scan runs on, so a project that released for
+# Windows would need the scan to run there to see it. See "Which Go
+# dependencies actually ship" in docs/configuration.md.
+ships:
+  - ./cmd/...
+  - ./pkg/...
+
 policies:
   - policies
 
