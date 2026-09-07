@@ -5,6 +5,6 @@
   "//": "Pinned to versions with published advisories. Never installed; the lockfile is the evidence.",
   "dependencies": {
     "lodash": "4.17.20",
-    "minimist": "1.2.5"
+    "minimist": "1.2.6"
   }
 }
