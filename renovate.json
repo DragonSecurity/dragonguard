@@ -1,0 +1,11 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>DragonSecurity/renovate-presets"],
+  "packageRules": [
+    {
+      "description": "The engine regression corpus is pinned to vulnerable versions deliberately. Its manifests are fixtures, not dependencies: testdata/corpus/expected.yaml asserts that a vulnerability IS reported against lodash 4.17.20 and minimist 1.2.5, so upgrading them does not fix anything -- it removes the thing the scanners are being tested against, and the corpus fails with 'no vulnerability reported against a version pinned to be vulnerable'. Nothing here is built, installed or shipped.",
+      "matchFileNames": ["testdata/**"],
+      "enabled": false
+    }
+  ]
+}
