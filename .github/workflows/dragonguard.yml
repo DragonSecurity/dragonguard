@@ -33,7 +33,7 @@ env:
   # renovate: datasource=github-releases depName=google/osv-scanner
   OSV_VERSION: "2.5.1"
   # renovate: datasource=github-releases depName=opengrep/opengrep
-  OPENGREP_VERSION: "1.29.0"
+  OPENGREP_VERSION: "1.30.0"
 
 jobs:
   gate:
