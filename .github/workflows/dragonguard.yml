@@ -124,7 +124,7 @@ jobs:
         # scanning. Its absence must not fail a run whose scan succeeded.
         continue-on-error: true
         if: always() && hashFiles('dragon.sarif') != ''
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
         with:
           sarif_file: dragon.sarif
           category: dragonguard
