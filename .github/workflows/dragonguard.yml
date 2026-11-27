@@ -33,7 +33,7 @@ env:
   # renovate: datasource=github-releases depName=google/osv-scanner
   OSV_VERSION: "2.7.1"
   # renovate: datasource=github-releases depName=opengrep/opengrep
-  OPENGREP_VERSION: "1.33.1"
+  OPENGREP_VERSION: "2.0.0"
 
 jobs:
   gate:
@@ -66,7 +66,7 @@ jobs:
           sudo chmod +x "$bin/osv-scanner"
 
           sudo curl -fsSL -o "$bin/opengrep" \
-            "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86"
+            "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_linux_x86"
           sudo chmod +x "$bin/opengrep"
 
           trivy --version && gitleaks version && osv-scanner --version && opengrep --version
